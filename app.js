@@ -110,14 +110,15 @@
   }
   function showLogin(msg) {
     const box = $('#login'); box.hidden = false;
-    box.innerHTML = `<div class="login-card"><h2>Sign in</h2><p class="muted">Enter your email and we'll send you a sign-in link and a 6-digit code.</p>
-      <form id="lg-form" class="inline wrap"><input type="email" id="lg-email" required placeholder="you@example.com" autocomplete="email" aria-label="Email"><button class="btn primary" type="submit">Send code</button></form>
+    box.innerHTML = `<div class="login-card"><h2>Sign in</h2><p class="muted">Enter your email and we'll send you a sign-in link. Open the email on this same device.</p>
+      <form id="lg-form" class="inline wrap"><input type="email" id="lg-email" required placeholder="you@example.com" autocomplete="email" aria-label="Email"><button class="btn primary" type="submit">Send link</button></form>
       <form id="lg-code" class="inline wrap" hidden><input type="text" id="lg-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="6-digit code" aria-label="Code"><button class="btn primary" type="submit">Sign in</button></form>
       <p class="small muted" id="lg-msg">${esc(msg || '')}</p></div>`;
     $('#lg-form').onsubmit = async (e) => { e.preventDefault(); const email = $('#lg-email').value.trim(); $('#lg-msg').textContent = 'Sending…';
       const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
       if (error) { $('#lg-msg').textContent = error.message; return; }
-      $('#lg-msg').textContent = 'Check your email: tap the link, or type the code here.'; $('#lg-code').hidden = false; $('#lg-otp').focus(); };
+      $('#lg-msg').innerHTML = 'Check your email and tap the link. The first time, the email is called <strong>Confirm your email address</strong>; after that it\'s <strong>Your sign-in link</strong>. <button class="link" type="button" id="lg-havecode">My email has a code instead</button>';
+      $('#lg-havecode').onclick = () => { $('#lg-code').hidden = false; $('#lg-otp').focus(); }; };
     $('#lg-code').onsubmit = async (e) => { e.preventDefault(); const { error } = await sb.auth.verifyOtp({ email: $('#lg-email').value.trim(), token: $('#lg-otp').value.trim(), type: 'email' }); if (error) $('#lg-msg').textContent = error.message; };
   }
   async function sbStart(session) {
