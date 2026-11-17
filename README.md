@@ -1,8 +1,10 @@
 # Swim & Dry-Land 12-Week Plan
 
-A 12-week swim, gym and nutrition plan for Ahmed and Yousr (Sat 28 Nov 2026 – Fri 19 Feb 2027),
-built as a static web app with a shared log. Hosting is Cloudflare Pages and the backend is Supabase,
+A 12-week swim, gym and nutrition plan for Ahmed and Yousr (start date and people are set in the app under Setup),
+built as a static web app with a shared log. Hosting is GitHub Pages and the backend is Supabase,
 both on free tiers.
+
+**Live site:** https://mohsenn1994.github.io/swim-dryland-plan/
 
 ## How it works
 
@@ -29,21 +31,20 @@ window.SUPABASE_CONFIG = { url: 'https://YOUR-PROJECT.supabase.co', anonKey: 'YO
 ```
 The anon key is meant to be public; the database rules protect the data. Commit and push.
 
-### 3. Cloudflare Pages (hosting)
-1. dash.cloudflare.com → Workers & Pages → Create → Pages → Connect to Git → pick this repo.
-2. Framework preset: **None**. Build command: *(empty)*. Output directory: **/**.
-3. Deploy. You get `https://<name>.pages.dev`.
+### 3. GitHub Pages (hosting)
+Repo → Settings → Pages → Source: **Deploy from a branch**, branch `main`, folder `/ (root)`.
+The site is served at https://mohsenn1994.github.io/swim-dryland-plan/ about a minute after each push.
 
 ### 4. Tell Supabase your site address
-Supabase → **Authentication → URL Configuration**: set **Site URL** to your `pages.dev` address and
-add it under **Redirect URLs**.
+Supabase → **Authentication → URL Configuration**: set **Site URL** to `https://mohsenn1994.github.io/swim-dryland-plan/` and
+add the same address under **Redirect URLs**.
 
 ### 5. Move your data over from the Claude version
 1. In the claude.ai version: Progress → Overview → **Everything** (downloads a .json backup).
 2. In the new site, sign in, then go to Progress → Overview → **Import a backup** and choose that file.
 
 ### 6. On your phones
-Open the `pages.dev` link, sign in with your email, then Share → **Add to Home Screen**.
+Open https://mohsenn1994.github.io/swim-dryland-plan/, sign in with your email, then Share → **Add to Home Screen**.
 
 ## Files
 
