@@ -24,6 +24,11 @@
   const dow = (s) => toD(s).getUTCDay();
   const R = P.RAMADAN;
   const PEOPLE = { a: { start: 96, target: 89.9, tLabel: '< 90 kg', min: 0.3, max: 0.8 }, b: { start: 71, target: 67, tLabel: '67 kg', min: 0.2, max: 0.6 } };
+  const REF = { m: 2750, f: 2000 };
+  const baseKey = (p) => ((cfg.profile[p] || {}).sex === 'f' ? 'b' : 'a');
+  function pfactor(p) { const t = P.TARGETS.early[p]; if (!t || !t.train) return 1; const f = t.train / REF[baseKey(p) === 'b' ? 'f' : 'm']; return Math.abs(f - 1) < 0.07 ? 1 : Math.min(1.4, Math.max(0.7, Math.round(f * 20) / 20)); }
+  function mi(m, p) { const f = pfactor(p), base = m[baseKey(p)]; return f === 1 ? base : base.map(([food, amt, u, hh]) => [food, Math.round((amt * f) / 5) * 5, u, hh + ' ×' + f]); }
+  function mk(m, p) { const f = pfactor(p), k = m[baseKey(p) + 'k']; return [Math.round((k[0] * f) / 10) * 10, Math.round(k[1] * f)]; }
   const avg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
   const num = (v) => { const x = parseFloat(v); return isNaN(x) ? null : x; };
   const parseTime = (t) => { if (t == null || t === '') return null; if (typeof t === 'number') return t; const p = String(t).trim().split(':'); if (p.length === 1) return num(p[0]); const s = (+p[0]) * 60 + parseFloat(p[1]); return isNaN(s) ? null : s; };
@@ -35,10 +40,13 @@
   const COLS = ['log', 'sessions', 'swims', 'daily', 'bench', 'inbody', 'health', 'reviews'];
   const store = { log: [], sessions: [], swims: [], daily: [], bench: [], inbody: [], health: [], reviews: [] };
   const PROFILE_DEFAULT = { a: { sex: 'm', age: 32, height: 180, weight: 96, target: 89.9, rate: 0.5 }, b: { sex: 'f', age: 29, height: 164, weight: 71, target: 65, rate: 0.4 } };
-  const cfg = { names: { a: 'Ahmed', b: 'Yousr' }, supps: { a: P.SUPPS.a, b: P.SUPPS.b }, settings: { ramadan: false, start: '2026-11-28' }, profile: JSON.parse(JSON.stringify(PROFILE_DEFAULT)) };
+  const cfg = { names: { a: 'Ahmed', b: 'Yousr' }, supps: { a: P.SUPPS.a, b: P.SUPPS.b }, settings: { ramadan: false, start: '2026-11-28' }, profile: JSON.parse(JSON.stringify(PROFILE_DEFAULT)), people: { list: [{ id: 'a' }, { id: 'b' }] } };
   let db = null, mode = 'loading', statusMsg = 'Connecting to the shared log…', statusCls = '';
   const LOCALKEY = 'swimplan-store-v2';
-  const names = () => cfg.names;
+  const PALETTE = ['#2f8a4c', '#7a5cc9', '#b7791f', '#2563c9', '#c2410c', '#0f766e'];
+  const PIDS = () => (cfg.people && Array.isArray(cfg.people.list) && cfg.people.list.length ? cfg.people.list.map((x) => x.id) : ['a', 'b']);
+  const names = () => { const o = Object.assign({}, cfg.names); ((cfg.people || {}).list || []).forEach((x) => { if (x.name && x.id !== 'a' && x.id !== 'b') o[x.id] = x.name; }); return o; };
+  const personOf = (id) => ((cfg.people || {}).list || []).find((x) => x.id === id) || {};
   const chains = {};
   const findDoc = (col, id) => store[col].find((d) => d._id === id);
 
@@ -147,7 +155,7 @@
       if (!snap.metadata.fromCache) { clearTimeout(timer); if (statusCls === 'warn' && mode === 'shared') setStatus('Shared log: entries sync between you.', ''); else if (statusMsg.startsWith('Connecting')) setStatus('Shared log: entries sync between you.', ''); }
       soon();
     }, (e) => { clearTimeout(timer); setStatus(e && e.code === 'revoked' ? 'The shared log isn\'t available in this view.' : 'The shared log stopped updating. Reopen the page to reconnect.', 'warn'); }));
-    ['names', 'supps', 'settings', 'profile'].forEach((n) => db.doc('config/' + n).onSnapshot((s) => {
+    ['names', 'supps', 'settings', 'profile', 'people'].forEach((n) => db.doc('config/' + n).onSnapshot((s) => {
       if (s.exists) { const v = s.data(); if (n === 'names') cfg.names = { a: v.a || 'Ahmed', b: v.b || 'Yousr' }; else cfg[n] = Object.assign({}, cfg[n], v); renderAll(); }
     }, () => {}));
   }
@@ -170,10 +178,13 @@
   }
   function applyPlan() {
     P.START = cfg.settings.start || '2026-11-28';
+    if (!PIDS().includes(me)) me = PIDS()[0];
     END = addDays(P.START, P.WEEKS * 7 - 1);
     FREE_DEFAULT = [2, 4, 6, 8, 10].map((w) => weekStart(w));
-    ['a', 'b'].forEach((k) => {
-      const pr = cfg.profile[k] = Object.assign({}, PROFILE_DEFAULT[k], cfg.profile[k] || {});
+    PIDS().forEach((k) => {
+      const pr = cfg.profile[k] = Object.assign({}, PROFILE_DEFAULT[k] || PROFILE_DEFAULT.b, cfg.profile[k] || {});
+      PEOPLE[k] = PEOPLE[k] || {};
+      P.FLEX.flexKcal[k] = pr.sex === 'm' ? 1000 : 700;
       P.TARGETS.early[k] = calcTargets(pr, pr.weight);
       P.TARGETS.late[k] = calcTargets(pr, Math.max(pr.target, pr.weight - pr.rate * 6));
       Object.assign(PEOPLE[k], { start: pr.weight, target: pr.target, tLabel: pr.target + ' kg', min: +(pr.rate * 0.5).toFixed(2), max: +Math.max(pr.rate * 1.6, pr.rate + 0.3).toFixed(2) });
@@ -375,8 +386,7 @@
     const m = P.MEALS[mId], n = names();
     const others = list.filter((x) => x !== mId).map((x) => P.MEALS[x].n);
     return `<div><span class="label">${esc(m.n)}</span> <span class="ar" lang="ar" dir="rtl">${esc(m.ar)}</span></div>
-      <div class="portion"><span class="who a">${esc(n.a)}</span><span>${fmtItems(m.a)}</span><span class="k num">~${m.ak[0]} kcal · ${m.ak[1]} g P</span>
-      <span class="who b">${esc(n.b)}</span><span>${fmtItems(m.b)}</span><span class="k num">~${m.bk[0]} kcal · ${m.bk[1]} g P</span></div>
+      <div class="portion">${PIDS().map((p) => `<span class="who" style="color:${pcol(p)}">${esc(n[p])}</span><span>${fmtItems(mi(m, p))}</span><span class="k num">~${mk(m, p)[0]} kcal · ${mk(m, p)[1]} g P</span>`).join('')}</div>
       ${(P.MEAL_RECIPES[mId] || []).length ? `<div class="swapline">Recipe: ${P.MEAL_RECIPES[mId].map((r) => `<button data-recipe="${r}">${esc(P.RECIPES.find((x) => x.id === r).n)}</button>`).join(' · ')}</div>` : ''}
       ${others.length && slotKey ? `<div class="swapline"><button data-swap="${slotKey}">Swap meal</button> · or: ${esc(others.join(', '))}</div>` : ''}`;
   }
@@ -389,7 +399,7 @@
     const n = names(), lifts = P.KEYLIFTS[sid] || [];
     const col = (p) => {
       const id = p + '_' + s, doc = findDoc('sessions', id) || {};
-      return `<form class="slog" data-slog="${p}"><div class="row between"><strong style="color:var(--${p === 'a' ? 'him' : 'her'})">${esc(n[p])}</strong>${doc.done ? '<span class="chip good">Done ✓</span>' : '<span class="chip">Not logged</span>'}</div>
+      return `<form class="slog" data-slog="${p}"><div class="row between"><strong style="color:${pcol(p)}">${esc(n[p])}</strong>${doc.done ? '<span class="chip good">Done ✓</span>' : '<span class="chip">Not logged</span>'}</div>
         ${lifts.map(([lid, inc]) => { const sg = suggest(p, lid, inc, s); const L = (doc.lifts || {})[lid] || {}; return `<div class="liftrow"><label for="sl-${p}-${lid}">${esc(P.EX[lid].n)}${lid === 'pullup' ? ' (added kg, 0 = bodyweight)' : lid === 'kbswing' ? ' (bell kg)' : ' (top set kg)'}</label>
           <div class="row"><input type="number" step="0.5" min="0" inputmode="decimal" id="sl-${p}-${lid}" value="${L.kg != null ? L.kg : ''}" placeholder="${sg.kg != null ? sg.kg : 'kg'}"><label class="check" for="sl-${p}-${lid}-hit"><input type="checkbox" id="sl-${p}-${lid}-hit" ${L.hit ? 'checked' : ''}><span>Hit all reps</span></label></div>
           <span class="small muted">${sg.text}</span></div>`; }).join('')}
@@ -397,7 +407,7 @@
         <input type="text" id="sl-${p}-note" maxlength="140" placeholder="Note (optional)" value="${esc(doc.note || '')}">
         <button class="btn primary sm" type="submit" ${ro()}>${doc.done ? 'Update log' : 'Save + mark done'}</button></form>`;
     };
-    return `<div class="card"><div class="row between"><h3>Log ${esc(P.SESSIONS[sid].short)}</h3>${statusEl()}</div><p class="small muted">Record your top set on each key lift. The suggestion updates from your last log: +load when you hit every rep, same load when you didn't, ~60% in deload weeks.</p><div class="grid2 tight">${col('a')}${col('b')}</div></div>`;
+    return `<div class="card"><div class="row between"><h3>Log ${esc(P.SESSIONS[sid].short)}</h3>${statusEl()}</div><p class="small muted">Record your top set on each key lift. The suggestion updates from your last log: +load when you hit every rep, same load when you didn't, ~60% in deload weeks.</p><div class="grid2 tight">${PIDS().map(col).join('')}</div></div>`;
   }
   const SW = P.SWIM;
   const segTotal = (segs) => segs.reduce((t, x) => t + (+x.reps || 0) * (+x.dist || 0), 0);
@@ -426,7 +436,7 @@
   function swimLogPanel(s) {
     const n = names(), segs = swimEditFor(s), total = segTotal(segs);
     const byPart = {}, byStroke = {}; segs.forEach((x) => { const m = (+x.reps || 0) * (+x.dist || 0); byPart[x.part] = (byPart[x.part] || 0) + m; byStroke[x.stroke] = (byStroke[x.stroke] || 0) + m; });
-    const who = (p) => { const d = findDoc('swims', p + '_' + s) || {}; return `<div class="swwho"><label class="check" for="sw-${p}-on"><input type="checkbox" id="sw-${p}-on" ${d.dist || !findDoc('swims', (p === 'a' ? 'b' : 'a') + '_' + s) || state.swimBoth ? 'checked' : ''}><span><strong style="color:var(--${p === 'a' ? 'him' : 'her'})">${esc(n[p])}</strong> swam this ${d.dist ? `<span class="chip swim">${d.dist} m saved</span>` : ''}</span></label>
+    const who = (p) => { const d = findDoc('swims', p + '_' + s) || {}; return `<div class="swwho"><label class="check" for="sw-${p}-on"><input type="checkbox" id="sw-${p}-on" ${d.dist || !findDoc('swims', (p === 'a' ? 'b' : 'a') + '_' + s) || state.swimBoth ? 'checked' : ''}><span><strong style="color:${pcol(p)}">${esc(n[p])}</strong> swam this ${d.dist ? `<span class="chip swim">${d.dist} m saved</span>` : ''}</span></label>
       <div class="row"><label class="small muted" for="sw-${p}-done">Metres actually done</label><input type="number" id="sw-${p}-done" step="25" min="0" inputmode="numeric" value="${d.dist && d.dist !== total ? d.dist : ''}" placeholder="${total || ''}" style="max-width:100px">
       <label class="small muted" for="sw-${p}-min">Minutes</label><input type="number" id="sw-${p}-min" step="5" min="0" value="${d.min || ''}" style="max-width:80px">
       <label class="small muted" for="sw-${p}-rpe">RPE</label><select id="sw-${p}-rpe">${['', 4, 5, 6, 7, 8, 9, 10].map((v) => `<option ${d.rpe == v && v !== '' ? 'selected' : ''} value="${v}">${v || '–'}</option>`).join('')}</select></div>
@@ -470,7 +480,7 @@
     const col = (p) => {
       const doc = findDoc('daily', p + '_' + s) || {}, taken = doc.supps || {};
       const stack = (cfg.supps[p] || []).filter((x) => !x.optional || taken[x.name] != null || true);
-      return `<form class="dlog" data-dlog="${p}"><strong style="color:var(--${p === 'a' ? 'him' : 'her'})">${esc(n[p])}</strong>
+      return `<form class="dlog" data-dlog="${p}"><strong style="color:${pcol(p)}">${esc(n[p])}</strong>
         ${stack.length ? `<div>${stack.map((x, i) => `<label class="check ${taken[x.name] ? 'done' : ''}" for="sp-${p}-${i}"><input type="checkbox" id="sp-${p}-${i}" data-supp="${esc(x.name)}" data-person="${p}" ${taken[x.name] ? 'checked' : ''} ${ro()}><span>${esc(x.name)} <span class="muted small">· ${esc(P.WHEN[x.when] || '')}</span></span></label>`).join('')}</div>` : `<p class="small muted">No supplements set. <a href="#supplements">Add a stack</a></p>`}
         <div class="row"><label class="small muted" for="dl-${p}-steps">Steps</label><input type="number" id="dl-${p}-steps" step="500" min="0" inputmode="numeric" value="${doc.steps || ''}" style="max-width:100px">
         <label class="small muted" for="dl-${p}-sleep">Sleep h</label><input type="number" id="dl-${p}-sleep" step="0.25" min="0" max="14" inputmode="decimal" value="${doc.sleep || ''}" style="max-width:80px"></div>
@@ -633,8 +643,7 @@
     for (let r = 1; r <= T.rounds; r++) {
       st.forEach((ex, i) => {
         if (T.partner) {
-          ph.push({ kind: 'work', dur: T.work, label: P.EX[ex].n, ex, who: 'a', round: r });
-          ph.push({ kind: 'work', dur: T.work, label: P.EX[ex].n, ex, who: 'b', round: r });
+          PIDS().forEach((pp) => ph.push({ kind: 'work', dur: T.work, label: P.EX[ex].n, ex, who: pp, round: r }));
           if (T.preset === 'vo2') ph.push({ kind: 'rest', dur: Math.max(5, T.rest - T.work), label: 'Easy spin', ex, round: r });
           else if (i < st.length - 1) ph.push({ kind: 'rest', dur: 5, label: 'Switch station', ex: st[i + 1], round: r });
         } else {
@@ -671,11 +680,11 @@
     const next = T.phases[T.i + 1];
     const remain = T.phases.slice(T.i + 1).reduce((s, x) => s + x.dur, 0) + T.left;
     const whoName = ph.who ? n[ph.who] : '';
-    box.className = 'timerbox ' + (T.finished ? 'done' : ph.kind) + (ph.who ? ' who-' + ph.who : '');
+    box.className = 'timerbox ' + (T.finished ? 'done' : ph.kind); if (ph.who && ph.kind === 'work' && !T.finished) box.style.background = pcol(ph.who); else box.style.background = '';
     box.innerHTML = `<div class="tphase">${T.finished ? 'Done. Nice work.' : ph.kind === 'work' ? (whoName ? esc(whoName) + ' works' : 'Work') : esc(ph.label)}</div>
       <div class="tclock num">${fmtTime(T.left)}</div>
       <div class="tex">${ph.kind === 'work' ? esc(ph.label) : 'Next: ' + esc(P.EX[ph.ex] ? P.EX[ph.ex].n : '')}</div>
-      ${T.partner && ph.kind === 'work' ? `<div class="small">${esc(ph.who === 'a' ? n.b : n.a)} rests and counts reps</div>` : ''}
+      ${T.partner && ph.kind === 'work' ? `<div class="small">${esc(others(ph.who).map((x) => n[x]).join(', '))} rest${others(ph.who).length > 1 ? '' : 's'} and count reps</div>` : ''}
       <div class="tmeta num">Round ${ph.round || 1} of ${T.rounds} · ${fmtTime(remain)} left${next && !T.finished ? ' · then ' + esc(next.kind === 'work' ? (next.who ? n[next.who] + ': ' : '') + next.label : next.label) : ''}</div>`;
     const sb = $('#tstart'); if (sb) sb.textContent = T.running ? 'Pause' : T.finished ? 'Restart' : (T.i || T.left !== (T.phases[0] || {}).dur) ? 'Resume' : 'Start';
   }
@@ -689,7 +698,7 @@
         <label class="small muted" for="t-rest">Rest s</label><input id="t-rest" type="number" min="0" step="5" value="${T.rest}" class="tin">
         <label class="small muted" for="t-rounds">Rounds</label><input id="t-rounds" type="number" min="1" step="1" value="${T.rounds}" class="tin">
         <label class="small muted" for="t-rr">Between rounds s</label><input id="t-rr" type="number" min="0" step="15" value="${T.rr}" class="tin">
-        <label class="check" for="t-partner"><input type="checkbox" id="t-partner" ${T.partner ? 'checked' : ''}><span>"I go, you go" (${esc(n.a)} then ${esc(n.b)} at each station)</span></label>
+        <label class="check" for="t-partner"><input type="checkbox" id="t-partner" ${T.partner ? 'checked' : ''}><span>"I go, you go" (${esc(PIDS().map((x) => n[x]).join(' → '))} at each station)</span></label>
       </div>
       <p class="small muted">Presets follow the current block. In partner mode your partner's work interval is your rest, so the rest setting is only used between stations (5 s to switch) and between rounds.</p></div>
       <div class="timerwrap"><div id="timerbox" class="timerbox"></div>
@@ -716,12 +725,12 @@
     const U = P.UNITS;
     $('#v-nutrition').innerHTML = `
       <div class="card"><h2>Daily targets</h2>
-      <p class="muted">${['a', 'b'].map((k) => { const pr = cfg.profile[k]; return `${esc(n[k])}: ${pr.age}, ${pr.height} cm, ${pr.weight} kg → ${pr.target} kg, expected −${pr.rate} kg/week`; }).join('. ')}. <a href="#setup">Edit profiles</a></p>
-      ${['early', 'late'].map((ph) => `<div class="logtable"><h4 style="margin:6px 0">${Tg[ph].label}</h4>${Tg[ph].note ? `<p class="small muted">${esc(Tg[ph].note)}</p>` : ''}<table><thead><tr><th></th><th>Training day kcal</th><th>Friday kcal</th><th>Protein</th><th>Fat</th><th>Carbs (train / rest)</th></tr></thead><tbody>${trow(ph, 'a')}${trow(ph, 'b')}</tbody></table></div>`).join('')}</div>
+      <p class="muted">${PIDS().map((k) => { const pr = cfg.profile[k]; return `${esc(n[k])}: ${pr.age}, ${pr.height} cm, ${pr.weight} kg → ${pr.target} kg, expected −${pr.rate} kg/week`; }).join('. ')}. <a href="#setup">Edit profiles</a></p>
+      ${['early', 'late'].map((ph) => `<div class="logtable"><h4 style="margin:6px 0">${Tg[ph].label}</h4>${Tg[ph].note ? `<p class="small muted">${esc(Tg[ph].note)}</p>` : ''}<table><thead><tr><th></th><th>Training day kcal</th><th>Friday kcal</th><th>Protein</th><th>Fat</th><th>Carbs (train / rest)</th></tr></thead><tbody>${PIDS().map((k) => trow(ph, k)).join('')}</tbody></table></div>`).join('')}</div>
       <div class="card"><h3>Check-ins</h3><dl class="kv">
-        <dt>Week 3</dt><dd>Losing more than 0.8 kg/week (${esc(n.a)}) or 0.6 (${esc(n.b)})? Add ~150 kcal on training days. Nothing moving? Cut ~150 kcal or add 2k steps a day, not both.</dd>
+        <dt>Week 3</dt><dd>Losing faster than planned (${PIDS().map((k) => esc(n[k]) + ' over ' + PEOPLE[k].max).join(', ')} kg/week)? Add ~150 kcal on training days. Nothing moving? Cut ~150 kcal or add 2k steps a day, not both.</dd>
         <dt>Week 6</dt><dd>Same check, plus InBody. Switch to the weeks 7–12 numbers if loss has slowed.</dd>
-        <dt>Week 9</dt><dd>Same check. ${esc(n.a)} around 92 kg usually needs another −100–150 kcal.</dd>
+        <dt>Week 9</dt><dd>Same check. Anyone who has lost 4+ kg usually needs another −100–150 kcal, or update the starting weight in Setup.</dd>
         <dt>Week 12</dt><dd>Re-test, then choose another fat-loss block or 2–4 weeks at maintenance.</dd>
         <dt>Performance rule</dt><dd>If swim times or gym loads drop for more than a week, eat more on training days, mostly carbs before sessions.</dd></dl>
         <p class="small muted">The Analytics tab runs these checks for you from your logs.</p></div>
@@ -729,7 +738,7 @@
       <div class="grid2"><div class="card"><h3>Flex meal · once a week</h3><ul class="clean">${P.FLEX.flexRules.map((r) => `<li>${esc(fillFlex(r))}</li>`).join('')}</ul><p class="small muted">Use it from Today: tap a meal, then "Make this my flex meal".</p></div>
       <div class="card"><h3>Free day · every other Saturday</h3><ul class="clean">${P.FLEX.freeRules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
       <p><strong>Planned for both of you:</strong> ${freeDays().map((d) => fmt(d, { weekday: 'short', day: 'numeric', month: 'short' })).join(' · ')}</p>
-      <p class="small muted">Free-day budget: up to ${P.FLEX.freeKcal.a.toLocaleString('en')} kcal for ${esc(names().a)} and ${P.FLEX.freeKcal.b.toLocaleString('en')} for ${esc(names().b)}. The other days that week drop by about ${Math.round((P.FLEX.freeKcal.a - P.TARGETS.early.a.train) / 60) * 10} and ${Math.round((P.FLEX.freeKcal.b - P.TARGETS.early.b.train) / 60) * 10} kcal to balance it. Move or skip one from Today.</p></div></div>
+      <p class="small muted">Free-day budget: ${PIDS().map((k) => `${esc(names()[k])} up to ${P.FLEX.freeKcal[k].toLocaleString('en')} kcal (other days −${Math.round((P.FLEX.freeKcal[k] - P.TARGETS.early[k].train) / 60) * 10})`).join(', ')}. Move or skip one from Today.</p></div></div>
       <div class="row between"><h2>Meal library</h2>${unitToggle()}</div>
       <p class="muted" style="margin-top:-12px">Every portion in grams or ml with the household measure beside it. Calories and protein are approximate. Any meal can replace another in the same category.</p>
       <div class="grid2">${lib}</div>
@@ -777,7 +786,7 @@
     };
     const col = (p) => {
       const stack = cfg.supps[p] || [], ad = adherence(p);
-      return `<div class="card"><div class="row between"><h3 style="color:var(--${p === 'a' ? 'him' : 'her'})">${esc(n[p])}'s stack</h3>${ad != null ? `<span class="chip ${ad >= 80 ? 'good' : 'dl'}">${ad}% taken, last 7 days</span>` : ''}</div>
+      return `<div class="card"><div class="row between"><h3 style="color:${pcol(p)}">${esc(n[p])}'s stack</h3>${ad != null ? `<span class="chip ${ad >= 80 ? 'good' : 'dl'}">${ad}% taken, last 7 days</span>` : ''}</div>
         ${stack.length ? order.filter((w) => stack.some((x) => x.when === w)).map((w) => `<div class="part"><div class="part-h"><h4>${esc(P.WHEN[w])}</h4></div>${stack.filter((x) => x.when === w).map((x) => `<div class="supp"><div class="row between"><strong>${esc(x.name)}</strong><span class="small num">${esc(x.dose)}</span></div>${x.note ? `<p class="small muted">${esc(x.note)}</p>` : ''}</div>`).join('')}</div>`).join('') : '<p class="muted">No stack yet. Add what she takes below and it will appear in her daily check-in.</p>'}
         <details><summary>Edit ${esc(n[p])}'s stack</summary>
           <div class="sedit" data-sedit="${p}">${stack.map((x, i) => suppRow(p, i, x)).join('')}</div>
@@ -789,7 +798,7 @@
       <div class="grid2">${col('a')}${col('b')}</div>
       <div class="grid2">
         <div class="card"><h3>About L-carnitine</h3><p>Taken alone it does little for fat loss in most studies. L-carnitine L-tartrate (1–2 g a day) has some evidence for less muscle soreness and faster recovery, but it only builds up in muscle when taken with carbs every day for about 12 weeks. If you add it, take it with the post-gym shake and a banana, and judge it at the end of the block. Your current basics (creatine, omega-3, D + K, magnesium) matter more.</p></div>
-        <div class="card"><h3>Ground rules</h3><ul class="clean"><li>Creatine is worth considering for ${esc(n.b)} too: 3–5 g a day helps strength and power for women as well.</li><li>Check for doubled-up doses: a multivitamin plus separate zinc, D or B-complex can push you over safe limits.</li><li>Vitamin D and iron are best dosed from a blood test.</li><li>Caffeine (1–3 mg/kg) before Thursday plyos or Saturday's session helps; avoid it after ~2 pm on evening-swim days.</li></ul>
+        <div class="card"><h3>Ground rules</h3><ul class="clean"><li>Creatine is worth considering for everyone: 3–5 g a day helps strength and power for women as well as men.</li><li>Check for doubled-up doses: a multivitamin plus separate zinc, D or B-complex can push you over safe limits.</li><li>Vitamin D and iron are best dosed from a blood test.</li><li>Caffeine (1–3 mg/kg) before Thursday plyos or Saturday's session helps; avoid it after ~2 pm on evening-swim days.</li></ul>
         <p class="small muted">General information, not medical advice. Check with a doctor or pharmacist before starting anything new, especially with a health condition or medication.</p></div>
       </div>`;
     $$('[data-sadd]').forEach((b) => (b.onclick = () => { const p = b.dataset.sadd, box = $(`[data-sedit="${p}"]`); box.insertAdjacentHTML('beforeend', suppRow(p, box.children.length, { name: '', dose: '', when: 'breakfast', note: '' })); bindSuppRows(); }));
@@ -823,7 +832,7 @@
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i); if (d < P.START || d > END) continue;
       const D = dayPlan(d);
-      ['a', 'b'].forEach((p) => { const dd = dailyOf(p, d); if (isFree(d)) return; D.items.forEach((it, idx) => { if (it[1] !== 'meal' || dd.flex === idx) return; const m = P.MEALS[mealFor(p, d, idx)]; if (!m) return; m[p].forEach(([food, amt]) => {
+      PIDS().forEach((p) => { const dd = dailyOf(p, d); if (isFree(d)) return; D.items.forEach((it, idx) => { if (it[1] !== 'meal' || dd.flex === idx) return; const m = P.MEALS[mealFor(p, d, idx)]; if (!m) return; mi(m, p).forEach(([food, amt]) => {
         const f = food.toLowerCase(), rule = GMAP.find(([re]) => re.test(f)); if (!rule || !rule[1]) return;
         let v = amt; if (rule[3] === 'tahina') v = /salad/.test(f) ? amt * 0.12 : amt; if (rule[3] === 'lentil') v = amt * 0.15; if (rule[3] === 'molo') v = amt / 3;
         const k = rule[2]; tot[k] = tot[k] || { rule, v: 0 }; tot[k].v += v; }); }); });
@@ -864,7 +873,7 @@
   function renderFuel() {
     const n = names();
     const wu = Object.values(P.WARMUPS).map((w) => `<div class="card"><h3>${esc(w.name)}</h3>${w.items.map(([id, rx]) => `<button class="exrow" data-ex="${id}">${fig(id)}<span class="nm">${esc(P.EX[id].n)}</span><span class="rx">${esc(rx)}</span></button>`).join('')}</div>`).join('');
-    const kv = (rows) => `<dl class="kv">${rows.map(([a, b]) => `<dt>${esc(a === 'Him' ? n.a : a === 'Her' ? n.b : a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl>`;
+    const kv = (rows) => `<dl class="kv">${rows.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl>`;
     $('#v-fuel').innerHTML = `
       <div class="card"><h2>Warm-ups and cool-down</h2><p class="muted">Circuit + Core (Monday) uses the general warm-up, Lower Power (Thursday) the longer plyo one, and Glutes + Mobility (Tuesday) and Upper Strength (Saturday) the short post-swim version.</p></div>
       <div class="grid3">${wu}<div class="card"><h3>Cool-down · 5 min</h3><ul class="clean">${P.COOLDOWN.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div></div>
@@ -913,7 +922,7 @@
     const legend = opts.series.map((s) => `<span class="lg"><i style="background:${s.c}"></i>${esc(s.name)}</span>`).join('');
     return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label)}">${g}</svg><div class="legend">${legend}</div></div>`;
   }
-  const PC = { a: 'var(--him)', b: 'var(--her)' };
+  const PC = new Proxy({}, { get: (_, k) => pcol(k) });
 
   /* ================= Body ================= */
   function weightStats(k) {
@@ -945,11 +954,11 @@
       <div class="grid2">
         <div class="card"><h2>Weigh-in schedule</h2><h4>Daily</h4><ul class="clean">${W.daily.map((x) => `<li>${esc(x)}</li>`).join('')}</ul><h4>Weekly</h4><ul class="clean">${W.weekly.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
         <div class="card"><h3>InBody scans</h3><div class="logtable"><table><tbody>${W.inbody.map((x) => `<tr class="${x.date === today ? 'current' : ''}"><td class="num"><strong>${fmt(x.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</strong></td><td>${esc(x.label)}<br><span class="small muted">${esc(x.note)}</span></td></tr>`).join('')}</tbody></table></div>
-        <h4>Getting a comparable reading</h4><ul class="clean">${W.inbodyRules.map((x) => `<li>${esc(x.replace('Yousr', n.b))}</li>`).join('')}</ul></div>
+        <h4>Getting a comparable reading</h4><ul class="clean">${W.inbodyRules.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
       </div>
       <div class="card"><div class="row between"><h3>Log a weigh-in</h3>${statusEl()}</div>
       <form class="log" id="wform">
-        <label for="lg-person">Who<select id="lg-person"><option value="a">${esc(n.a)}</option><option value="b">${esc(n.b)}</option></select></label>
+        <label for="lg-person">Who<select id="lg-person">${PIDS().map((k) => `<option value="${k}" ${k === me ? 'selected' : ''}>${esc(n[k])}</option>`).join('')}</select></label>
         <label for="lg-date">Date<input type="date" id="lg-date" value="${today}"></label>
         <label for="lg-weight">Morning weight (kg)<input type="number" id="lg-weight" step="0.1" min="30" max="200" inputmode="decimal"></label>
         <label for="lg-waist">Waist (cm)<input type="number" id="lg-waist" step="0.5" min="40" max="160" inputmode="decimal"></label>
@@ -958,7 +967,7 @@
       </form></div>
       <div class="card"><div class="row between"><h3>Log an InBody scan</h3></div>
       <form class="log" id="ibform">
-        <label for="ib-person">Who<select id="ib-person"><option value="a">${esc(n.a)}</option><option value="b">${esc(n.b)}</option></select></label>
+        <label for="ib-person">Who<select id="ib-person">${PIDS().map((k) => `<option value="${k}" ${k === me ? 'selected' : ''}>${esc(n[k])}</option>`).join('')}</select></label>
         <label for="ib-date">Date<input type="date" id="ib-date" value="${today}"></label>
         <label for="ib-weight">Weight (kg)<input type="number" id="ib-weight" step="0.1" inputmode="decimal"></label>
         <label for="ib-smm">Skeletal muscle mass (kg)<input type="number" id="ib-smm" step="0.1" inputmode="decimal"></label>
@@ -968,13 +977,12 @@
         <label for="ib-bmr">BMR (kcal)<input type="number" id="ib-bmr" step="1" inputmode="numeric"></label>
         <div class="row"><button class="btn primary" type="submit" ${ro()}>Save scan</button></div>
       </form></div>
-      <div class="grid2">${pCard('a')}${pCard('b')}</div>
+      <div class="grid2">${PIDS().map(pCard).join('')}</div>
       <div class="card"><div class="row between"><h3>Weigh-ins</h3><span class="small muted">${store.log.length} saved</span></div>
       <div class="logtable"><table><thead><tr><th>Date</th><th>Who</th><th>Weight</th><th>Waist</th><th>Note</th><th></th></tr></thead><tbody>
       ${sorted.slice(0, 40).map((e) => `<tr><td class="num">${fmt(e.date)}</td><td>${esc(n[e.person] || e.person)}</td><td class="num">${e.weight != null ? e.weight.toFixed(1) : ''}</td><td class="num">${e.waist || ''}</td><td class="small">${esc(e.note || '')}</td><td><button class="btn sm" data-delc="log" data-id="${esc(e._id)}" ${ro()}>Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No entries yet.</td></tr>'}
       </tbody></table></div></div>
-      <div class="card"><h3>Names</h3><div class="row names"><label class="small muted" for="nm-a">Him</label><input id="nm-a" value="${esc(n.a)}" maxlength="24" style="max-width:180px"><label class="small muted" for="nm-b">Her</label><input id="nm-b" value="${esc(n.b)}" maxlength="24" style="max-width:180px"><button class="btn sm" id="nm-save" ${ro()}>Save names</button></div>
-      <p class="small muted">For ${esc(n.b)} to log her own entries, share this page with her as a Contributor from the Share menu.</p></div>`;
+      <p class="small muted">Names and people are managed in <a href="#setup">Setup → Profiles</a>.</p>`;
     $('#wform').onsubmit = async (e) => {
       e.preventDefault();
       const p = $('#lg-person').value, date = $('#lg-date').value, wt = num($('#lg-weight').value);
@@ -993,7 +1001,7 @@
       if (await put('inbody', p + '_' + date, rec)) clearDirty($('#ibform'));
     };
     bindDeletes($('#v-body'));
-    $('#nm-save').onclick = () => putCfg('names', { a: $('#nm-a').value.trim() || 'Ahmed', b: $('#nm-b').value.trim() || 'Yousr' });
+
   }
   const bindDeletes = (root) => $$('[data-delc]', root).forEach((b) => (b.onclick = () => del(b.dataset.delc, b.dataset.id)));
 
@@ -1014,12 +1022,12 @@
       <dl class="kv">${B.tests.map((t) => `<dt>${esc(t.n)}</dt><dd>${esc(t.when)}. ${esc(t.how)}</dd>`).join('')}</dl></div>
       <div class="card"><h3>Log test results</h3>
       <form class="log" id="bform">
-        <label for="bt-person">Who<select id="bt-person"><option value="a">${esc(n.a)}</option><option value="b">${esc(n.b)}</option></select></label>
+        <label for="bt-person">Who<select id="bt-person">${PIDS().map((k) => `<option value="${k}" ${k === me ? 'selected' : ''}>${esc(n[k])}</option>`).join('')}</select></label>
         <label for="bt-round">Round<select id="bt-round">${B.rounds.map((r) => `<option value="${r.id}">${r.label} · ${esc(r.when)}</option>`).join('')}</select></label>
         ${B.tests.map((t) => `<label for="bt-${t.id}">${esc(t.n)} (${t.unit === 'time' ? 'm:ss' : t.unit})<input id="bt-${t.id}" ${t.unit === 'time' ? 'type="text" placeholder="1:32.5"' : 'type="number" step="1" inputmode="numeric"'}></label>`).join('')}
         <div class="row"><button class="btn primary" type="submit" ${ro()}>Save results</button><span class="small muted">Blank fields keep earlier values for that round.</span></div>
       </form></div>
-      <div class="grid2"><div class="card"><h3 style="color:var(--him)">${esc(n.a)}</h3>${btable('a')}</div><div class="card"><h3 style="color:var(--her)">${esc(n.b)}</h3>${btable('b')}</div></div>
+      <div class="grid2">${PIDS().map((k) => `<div class="card"><h3 style="color:${pcol(k)}">${esc(n[k])}</h3>${btable(k)}</div>`).join('')}</div>
       <div class="card"><h3>Session log</h3><div class="logtable"><table><thead><tr><th>Date</th><th>Who</th><th>Session</th><th>RPE</th><th>Key lifts</th><th>Note</th><th></th></tr></thead><tbody>
         ${sess.slice(0, 60).map((x) => `<tr><td class="num">${fmt(x.date)}</td><td>${esc(n[x.person])}</td><td>${esc(P.SESSIONS[x.session] ? P.SESSIONS[x.session].short : x.session)} <span class="small muted">${esc(BLOCKS[x.block] ? BLOCKS[x.block].name : '')}</span></td><td class="num">${x.rpe || ''}</td><td class="small">${Object.entries(x.lifts || {}).map(([k, v]) => `${esc(P.EX[k] ? P.EX[k].n : k)} ${v.kg} kg ${v.hit ? '✓' : '✗'}`).join(' · ')}</td><td class="small">${esc(x.note || '')}</td><td><button class="btn sm" data-delc="sessions" data-id="${esc(x._id)}" ${ro()}>Delete</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Log sessions from the Day plan.</td></tr>'}
       </tbody></table></div></div>
@@ -1041,9 +1049,8 @@
     const n = names(), today = todayCairo();
     const wk = (d) => weekOf(d);
     const perWeek = (rows, p, fn) => { const v = Array(P.WEEKS).fill(0); rows.filter((r) => r.person === p).forEach((r) => { const w = wk(r.date); if (w) v[w - 1] += fn(r); }); return v; };
-    const gymW = { a: perWeek(store.sessions.filter((x) => x.done), 'a', () => 1), b: perWeek(store.sessions.filter((x) => x.done), 'b', () => 1) };
-    const swimW = { a: perWeek(store.swims, 'a', () => 1), b: perWeek(store.swims, 'b', () => 1) };
-    const volW = { a: perWeek(store.swims, 'a', (r) => (r.dist || 0) / 1000), b: perWeek(store.swims, 'b', (r) => (r.dist || 0) / 1000) };
+    const gymW = {}, swimW = {}, volW = {};
+    PIDS().forEach((k) => { gymW[k] = perWeek(store.sessions.filter((x) => x.done), k, () => 1); swimW[k] = perWeek(store.swims, k, () => 1); volW[k] = perWeek(store.swims, k, (r) => (r.dist || 0) / 1000); });
     const curW = Math.max(1, Math.min(P.WEEKS, wk(today) || (today < P.START ? 1 : P.WEEKS)));
     const last4 = (arr) => { const from = Math.max(0, curW - 4), sl = arr.slice(from, curW); return sl.reduce((s, x) => s + x, 0) / (sl.length * 4 || 1); };
     const tile = (p) => {
@@ -1073,22 +1080,23 @@
     $('#v-analytics').innerHTML = `
       <div class="card"><h2>Analytics</h2><p class="muted">Everything here is calculated from your logs. Adherence counts logged sessions and swims against 4 each per week.</p></div>
       ${reviewCard(true)}
-      <div class="grid2">${tile('a')}${tile('b')}</div>
+      <div class="grid2">${PIDS().map(tile).join('')}</div>
       ${badgesHTML()}
       ${backupCard()}
       <div class="grid2 wide">
-        <div class="card"><h3>Weight trend (7-day average)</h3>${lineChart({ label: 'weight both', series: ['a', 'b'].map((p) => ({ pts: rolling(weightStats(p).es).map(([d, v]) => [d, ((PEOPLE[p].start - v) / (PEOPLE[p].start - PEOPLE[p].target)) * 100]), c: PC[p], name: n[p] })), refs: [{ v: 100, c: 'var(--good)', label: 'Target reached' }], fy: (x) => Math.round(x) + '%', empty: 'No weigh-ins yet.' })}<p class="small muted">Shown as % of the way to each target, so you can compare on one chart.</p></div>
-        <div class="card"><h3>Gym sessions per week</h3>${weekBars({ label: 'gym per week', max: 4, series: [{ name: n.a, c: PC.a, vals: gymW.a }, { name: n.b, c: PC.b, vals: gymW.b }] })}</div>
-        <div class="card"><h3>Swim volume per week (km)</h3>${weekBars({ label: 'swim km', series: [{ name: n.a, c: PC.a, vals: volW.a }, { name: n.b, c: PC.b, vals: volW.b }], fy: (x) => x.toFixed(1) })}</div>
+        <div class="card"><h3>Weight trend (7-day average)</h3>${lineChart({ label: 'weight both', series: PIDS().map((p) => ({ pts: rolling(weightStats(p).es).map(([d, v]) => [d, ((PEOPLE[p].start - v) / (PEOPLE[p].start - PEOPLE[p].target)) * 100]), c: PC[p], name: n[p] })), refs: [{ v: 100, c: 'var(--good)', label: 'Target reached' }], fy: (x) => Math.round(x) + '%', empty: 'No weigh-ins yet.' })}<p class="small muted">Shown as % of the way to each target, so you can compare on one chart.</p></div>
+        <div class="card"><h3>Gym sessions per week</h3>${weekBars({ label: 'gym per week', max: 4, series: PIDS().map((k) => ({ name: n[k], c: pcol(k), vals: gymW[k] })) })}</div>
+        <div class="card"><h3>Swim volume per week (km)</h3>${weekBars({ label: 'swim km', series: PIDS().map((k) => ({ name: n[k], c: pcol(k), vals: volW[k] })), fy: (x) => x.toFixed(1) })}</div>
       </div>
-      <div class="grid2"><div class="card"><h3>${esc(n.a)}: strength</h3><div class="grid2 tight">${liftCharts('a')}</div></div><div class="card"><h3>${esc(n.b)}: strength</h3><div class="grid2 tight">${liftCharts('b')}</div></div></div>
-      <div class="grid2"><div class="card"><h3>${esc(n.a)}: InBody</h3>${ib('a')}</div><div class="card"><h3>${esc(n.b)}: InBody</h3>${ib('b')}</div></div>`;
+      <div class="grid2">${PIDS().map((k) => `<div class="card"><h3>${esc(n[k])}: strength</h3><div class="grid2 tight">${liftCharts(k)}</div></div>`).join('')}</div>
+      <div class="grid2">${PIDS().map((k) => `<div class="card"><h3>${esc(n[k])}: InBody</h3>${ib(k)}</div>`).join('')}</div>`;
   }
 
   /* ================= Me, streaks, scores, badges ================= */
   let me = lsGet('swimplan-me', null) || 'a';
-  const other = (p) => (p === 'a' ? 'b' : 'a');
-  const pcol = (p) => (p === 'a' ? 'var(--him)' : 'var(--her)');
+  const others = (p) => PIDS().filter((x) => x !== p);
+  const other = (p) => others(p)[0] || p;
+  const pcol = (p) => (p === 'a' ? 'var(--him)' : p === 'b' ? 'var(--her)' : personOf(p).color || PALETTE[0]);
   const dailyOf = (p, d) => findDoc('daily', p + '_' + d) || {};
   const activeDay = (p, d) => { const dd = findDoc('daily', p + '_' + d); return !!(findDoc('log', p + '_' + d) || (dd && (dd.status || dd.suppsDone || dd.steps != null || dd.sleep != null || dd.food)) || (findDoc('sessions', p + '_' + d) || {}).done || findDoc('swims', p + '_' + d)); };
   function streak(p) {
@@ -1186,7 +1194,7 @@
     const days = []; for (let d = a; d <= b; d = addDays(d, 1)) if (d !== fd && d >= P.START && d <= END) days.push(d);
     return Math.round(freeExtra(p, fd) / Math.max(1, days.length) / 10) * 10;
   }
-  const fillFlex = (t) => t.replace('{a}', P.FLEX.flexKcal.a).replace('{b}', P.FLEX.flexKcal.b).replace('{A}', names().a).replace('{B}', names().b);
+  const fillFlex = (t) => t.replace('roughly {a} kcal for {A} or {b} kcal for {B}', 'roughly ' + PIDS().map((k) => `${P.FLEX.flexKcal[k].toLocaleString('en')} kcal for ${names()[k]}`).join(', '));
 
   /* ================= Today ================= */
   const EFFORT = [['Easy', 5], ['Steady', 6], ['Hard', 8], ['All-out', 9]];
@@ -1200,7 +1208,6 @@
     if (state.view !== 'day' || state.who === 'both') return renderOverview(v);
     const s = state.date, p = me, w = weekOf(s), b = blockFor(s), D = dayPlan(s), ph = P.TARGETS[phaseOf(w)];
     const tasks = tasksFor(p, s), done = tasks.filter((t) => t.done).length;
-    const ptasks = tasksFor(other(p), s), pdone = ptasks.filter((t) => t.done).length;
     const stk = streak(p), ws = w ? weekScore(p, w) : null;
     const isToday = s === today;
     const tObj = (id) => tasks.find((t) => t.id === id);
@@ -1226,7 +1233,7 @@
       cards.push(`<div class="task ${tObj('swim').done ? 'done' : ''}">${check(tObj('swim').done)}<div class="tbody"><div class="tt">Swim · ${esc(D.swim)}</div>
         ${!editing ? `<div class="tsub"><strong class="num">${(sw.dist || 0).toLocaleString('en')} m</strong>${sw.effort ? ' · ' + esc(sw.effort) : ''}${sw.text ? ' · session saved' : ''} <button class="link" data-edit="swim">Edit</button></div>${sw.text ? `<details class="pasted"><summary>Session</summary><pre>${esc(sw.text)}</pre></details>` : ''}` :
         `<form class="swq" id="q-swim"><div class="row"><label class="sr" for="q-dist">Metres swum</label><input type="number" id="q-dist" step="50" min="0" inputmode="numeric" placeholder="Total metres" value="${sw ? sw.dist : ''}" class="bigin">
-          <label class="check" for="q-both"><input type="checkbox" id="q-both" ${findDoc('swims', other(p) + '_' + s) ? '' : 'checked'}><span>${esc(n[other(p)])} swam the same</span></label></div>
+          ${others(p).map((q) => `<label class="check" for="q-same-${q}"><input type="checkbox" id="q-same-${q}" data-same="${q}" ${findDoc('swims', q + '_' + s) ? '' : 'checked'}><span>${esc(n[q])} swam the same</span></label>`).join('')}</div>
           <div class="pills" role="group" aria-label="How hard">${EFFORT.map(([l]) => `<button type="button" class="pill ${(state.effort || (sw && sw.effort)) === l ? 'on' : ''}" data-effort="${l}">${l}</button>`).join('')}</div>
           <details ${sw && sw.text ? 'open' : ''}><summary>Add the full session (optional)</summary><textarea id="q-text" rows="6" placeholder="Paste the practice here, e.g.&#10;400 warm-up&#10;8x50 kick @1:10&#10;10x100 free @1:40&#10;200 cool-down">${esc(sw && sw.text || '')}</textarea><span class="small muted" id="q-detect"></span></details>
           <button class="btn primary" type="submit" ${ro()}>Save swim</button></form>`}</div></div>`);
@@ -1258,7 +1265,7 @@
       cards.push(`<div class="task ${tObj('food').done ? 'done' : ''}">${check(tObj('food').done)}<div class="tbody"><div class="tt">${free ? 'Free day' : 'Eat to plan'}</div><div class="tsub muted"><strong class="num">${free ? 'up to ' : ''}${kcal.toLocaleString('en')} kcal</strong> · <strong class="num">${t.p} g protein</strong> today${free ? '' : ' · tap a meal for portions, swaps and the recipe'}</div>
         ${bal ? `<div class="balance"><strong>Balance day: −${bal} kcal</strong> for this week's free day (${fmt(freeDays().find((x) => x >= weekRange(s)[0] && x <= weekRange(s)[1]), { weekday: 'long' })}). Easiest way: halve the bread or rice at dinner${bal > 150 ? ' and skip the dates in your snack' : ''}.</div>` : ''}
         ${free ? `<div class="freeday"><p>Eat what you enjoy today. The other days this week are set ${balanceFor(p, s === weekRange(s)[0] ? addDays(s, 1) : weekRange(s)[0])} kcal lower each to pay for it, so your weekly deficit stays on track.</p><ul class="clean">${P.FLEX.freeRules.slice(1).map((r) => `<li>${esc(r)}</li>`).join('')}</ul><div class="row"><button class="link" id="q-free-skip">Skip this free day</button></div></div>` : `
-        <div class="meals">${items.map((it) => { const i = D.items.indexOf(it), dd = dailyOf(p, s); if (dd.flex === i) return `<button class="mealrow flex" data-meal-slot="${i}" type="button"><span class="num mt">${it[0]}</span><span class="mr-main"><strong>Flex meal</strong> <span class="chip dl">Your choice</span><br><span class="small muted">${esc(it[3] || P.CATS[it[2]])} · up to ~${P.FLEX.flexKcal[p].toLocaleString('en')} kcal · start with protein</span></span><span class="chev" aria-hidden="true">›</span></button>`; const m = P.MEALS[mealFor(p, s, i)], chosen = (dd.meals || {})[i]; return `<button class="mealrow" data-meal-slot="${i}" type="button"><span class="num mt">${it[0]}</span><span class="mr-main"><strong>${esc(m.n)}</strong>${chosen ? ' <span class="chip">Swapped</span>' : ''}<br><span class="small muted">${esc(it[3] || P.CATS[it[2]])} · ~${m[p + 'k'][0]} kcal · ${m[p + 'k'][1]} g protein</span></span><span class="chev" aria-hidden="true">›</span></button>`; }).join('')}</div>
+        <div class="meals">${items.map((it) => { const i = D.items.indexOf(it), dd = dailyOf(p, s); if (dd.flex === i) return `<button class="mealrow flex" data-meal-slot="${i}" type="button"><span class="num mt">${it[0]}</span><span class="mr-main"><strong>Flex meal</strong> <span class="chip dl">Your choice</span><br><span class="small muted">${esc(it[3] || P.CATS[it[2]])} · up to ~${P.FLEX.flexKcal[p].toLocaleString('en')} kcal · start with protein</span></span><span class="chev" aria-hidden="true">›</span></button>`; const m = P.MEALS[mealFor(p, s, i)], chosen = (dd.meals || {})[i]; return `<button class="mealrow" data-meal-slot="${i}" type="button"><span class="num mt">${it[0]}</span><span class="mr-main"><strong>${esc(m.n)}</strong>${chosen ? ' <span class="chip">Swapped</span>' : ''}<br><span class="small muted">${esc(it[3] || P.CATS[it[2]])} · ~${mk(m, p)[0]} kcal · ${mk(m, p)[1]} g protein</span></span><span class="chev" aria-hidden="true">›</span></button>`; }).join('')}</div>
         <div class="small muted flexline">${flexUsed(p, s) || ddS.flex != null ? 'Flex meal used this week.' : 'Flex meal: 1 left this week (tap a meal to use it).'} ${fip ? `Free day: ${fmt(fip, { weekday: 'short', day: 'numeric', month: 'short' })}.` : 'No free day in this 2-week block.'} ${weekOf(s) && weekOf(s) <= 10 && !(ramadanOn() && inRamadan(s)) ? `<button class="link" id="q-free-move">${fip ? 'Move it to today' : 'Make today the free day'}</button>` : ''}</div>`}
         <div class="row">${unitToggle()}</div>
         <button class="btn ${tObj('food').done ? '' : 'primary'}" id="q-food" ${ro()}>${tObj('food').done ? 'Ate to plan ✓ (undo)' : 'I ate to plan and hit my protein'}</button></div></div>`);
@@ -1286,7 +1293,7 @@
       ${banners.join('')}
       ${reviewCard(false)}
       <div class="tasks">${cards.join('')}</div>
-      <div class="partner card"><span class="dot" style="background:${pcol(other(p))}"></span><span><strong>${esc(n[other(p)])}</strong> has done ${pdone} of ${ptasks.length} ${isToday ? 'today' : 'that day'}${pdone === ptasks.length ? '. Day complete.' : '.'}</span>${streak(other(p)) ? `<span class="small muted">${streak(other(p))}-day streak</span>` : ''}</div>
+      ${others(p).map((q) => { const qt = tasksFor(q, s), qd = qt.filter((t) => t.done).length; return `<div class="partner card"><span class="dot" style="background:${pcol(q)}"></span><span><strong>${esc(n[q])}</strong> has done ${qd} of ${qt.length} ${isToday ? 'today' : 'that day'}${qd === qt.length ? '. Day complete.' : '.'}</span>${streak(q) ? `<span class="small muted">${streak(q)}-day streak</span>` : ''}</div>`; }).join('')}
       ${next ? `<div class="milestone"><span class="badge-ic locked" aria-hidden="true"></span><span><strong>Next badge: ${esc(next.n)}.</strong> ${esc(next.d)}.</span><a class="link" href="#analytics">All badges</a></div>` : ''}
       ${statusEl()}`;
     hydrate(v);
@@ -1331,10 +1338,10 @@
         if (!dist) return setStatus('Enter the total metres you swam.', 'warn');
         const sw = findDoc('swims', p + '_' + s) || {};
         const effort = state.effort || sw.effort || null;
-        const mk = (pp) => { const r = { person: pp, date: s, week: w, dist }; if (text) r.text = text; if (effort) { r.effort = effort; r.rpe = EFFORT.find((x) => x[0] === effort)[1]; } return r; };
-        const both = $('#q-both') && $('#q-both').checked;
+        const mkSwim = (pp) => { const r = { person: pp, date: s, week: w, dist }; if (text) r.text = text; if (effort) { r.effort = effort; r.rpe = EFFORT.find((x) => x[0] === effort)[1]; } return r; };
+        const same = $$('[data-same]', fs).filter((x) => x.checked).map((x) => x.dataset.same);
         state.edit.swim = false; state.effort = null;
-        const ok = await put('swims', p + '_' + s, mk(p)); if (both) await put('swims', other(p) + '_' + s, mk(other(p)));
+        const ok = await put('swims', p + '_' + s, mkSwim(p)); for (const q of same) await put('swims', q + '_' + s, mkSwim(q));
         if (ok) { clearDirty(fs); celebrateIfComplete(p, s, before); }
       };
     }
@@ -1389,7 +1396,7 @@
   }
   function openMealSheet(p, s, i) { state.sheet = { p, s, i }; drawMealSheet(); const d = $('#mealsheet'); if (!d.open) d.showModal(); }
   function drawMealSheet() {
-    const { p, s, i } = state.sheet, n = names(), q = other(p), D = dayPlan(s), it = D.items[i], cur = mealFor(p, s, i), m = P.MEALS[cur];
+    const { p, s, i } = state.sheet, n = names(), qs = others(p), D = dayPlan(s), it = D.items[i], cur = mealFor(p, s, i), m = P.MEALS[cur];
     const isFlex = dailyOf(p, s).flex === i, canFlex = !isFlex && !flexUsed(p, s) && dailyOf(p, s).flex == null;
     const flexBlock = `<div class="flexbox"><h4>Flex meal</h4>${isFlex ? `<ul class="clean">${P.FLEX.flexRules.map((r) => `<li>${esc(fillFlex(r))}</li>`).join('')}</ul><button class="btn" id="ms-unflex" ${ro()}>Back to the planned meal</button>` : canFlex ? `<p class="small muted">One meal a week can be anything you like, up to ~${P.FLEX.flexKcal[p].toLocaleString('en')} kcal.</p><button class="btn" id="ms-flex" ${ro()}>Make this my flex meal</button>` : '<p class="small muted">Flex meal already used this week.</p>'}</div>`;
     if (isFlex) {
@@ -1405,17 +1412,17 @@
       <div class="sheet-grab" aria-hidden="true"></div>
       <div class="sheet-head"><div><span class="small muted">${it[0]} · ${esc(it[3] || P.CATS[it[2]])}</span><h2 id="mealsheet-title">${esc(m.n)}</h2><span class="ar" lang="ar" dir="rtl">${esc(m.ar)}</span></div><button class="btn sm" id="ms-close">Close</button></div>
       <div class="row">${unitToggle()}</div>
-      <div class="portion-card" style="border-color:${pcol(p)}"><div class="row between"><strong style="color:${pcol(p)}">${esc(n[p])}'s portion</strong><span class="num small"><strong>~${m[p + 'k'][0]} kcal</strong> · <strong>${m[p + 'k'][1]} g protein</strong></span></div><ul class="clean">${m[p].map((x) => `<li>${unitMode === 'both' ? fmtItem([esc(x[0]), x[1], x[2], x[3]]) : esc(fmtItem(x))}</li>`).join('')}</ul></div>
-      <details><summary>${esc(n[q])}'s portion</summary><p class="small">${fmtItems(m[q])} <span class="muted">· ~${m[q + 'k'][0]} kcal · ${m[q + 'k'][1]} g protein</span></p></details>
+      <div class="portion-card" style="border-color:${pcol(p)}"><div class="row between"><strong style="color:${pcol(p)}">${esc(n[p])}'s portion</strong><span class="num small"><strong>~${mk(m, p)[0]} kcal</strong> · <strong>${mk(m, p)[1]} g protein</strong></span></div><ul class="clean">${mi(m, p).map((x) => `<li>${unitMode === 'both' ? fmtItem([esc(x[0]), x[1], x[2], x[3]]) : esc(fmtItem(x))}</li>`).join('')}</ul></div>
+      ${qs.length ? `<details><summary>${esc(qs.map((q) => n[q]).join(' & '))}'s portion${qs.length > 1 ? 's' : ''}</summary>${qs.map((q) => `<p class="small"><strong style="color:${pcol(q)}">${esc(n[q])}:</strong> ${fmtItems(mi(m, q))} <span class="muted">· ~${mk(m, q)[0]} kcal · ${mk(m, q)[1]} g protein</span></p>`).join('')}</details>` : ''}
       ${recipes.length ? `<div class="row">${recipes.map((r) => `<button class="btn" data-recipe="${r.id}">Recipe: ${esc(r.n)}</button>`).join('')}</div>` : ''}
-      ${alts.length ? `<div><h4>Alternatives</h4><label class="check small" for="ms-both"><input type="checkbox" id="ms-both" ${state.sheetBoth !== false ? 'checked' : ''}><span>Swap it for ${esc(n[q])} too</span></label>
-      <div class="altmeals">${alts.map((k) => { const a = P.MEALS[k], dk = a[p + 'k'][0] - m[p + 'k'][0]; return `<div class="altmeal"><div><strong>${esc(a.n)}</strong> <span class="ar" lang="ar" dir="rtl">${esc(a.ar)}</span><br><span class="small muted num">~${a[p + 'k'][0]} kcal (${dk >= 0 ? '+' : '−'}${Math.abs(dk)}) · ${a[p + 'k'][1]} g protein</span><br><span class="small">${esc(a[p].slice(0, 3).map((x) => x[3] + ' ' + x[0].replace(/\s*\(.*\)/, '')).join(' · '))}</span></div><button class="btn sm primary" data-choose="${k}" ${ro()}>Choose</button></div>`; }).join('')}</div></div>` : ''}
+      ${alts.length ? `<div><h4>Alternatives</h4><label class="check small" for="ms-both"><input type="checkbox" id="ms-both" ${state.sheetBoth !== false ? 'checked' : ''}><span>Swap it for ${esc(qs.map((q) => n[q]).join(' & ') || 'everyone')} too</span></label>
+      <div class="altmeals">${alts.map((k) => { const a = P.MEALS[k], dk = mk(a, p)[0] - mk(m, p)[0]; return `<div class="altmeal"><div><strong>${esc(a.n)}</strong> <span class="ar" lang="ar" dir="rtl">${esc(a.ar)}</span><br><span class="small muted num">~${mk(a, p)[0]} kcal (${dk >= 0 ? '+' : '−'}${Math.abs(dk)}) · ${mk(a, p)[1]} g protein</span><br><span class="small">${esc(mi(a, p).slice(0, 3).map((x) => x[3] + ' ' + x[0].replace(/\s*\(.*\)/, '')).join(' · '))}</span></div><button class="btn sm primary" data-choose="${k}" ${ro()}>Choose</button></div>`; }).join('')}</div></div>` : ''}
       ${flexBlock}
       ${cur !== planPick ? `<button class="link" id="ms-reset">Back to the plan's pick (${esc(P.MEALS[planPick].n)})</button>` : ''}`;
     $('#ms-close').onclick = () => $('#mealsheet').close();
     const both = $('#ms-both'); if (both) both.onchange = () => { state.sheetBoth = both.checked; };
     const setMeal = async (k) => {
-      const who = [p].concat($('#ms-both') && $('#ms-both').checked ? [q] : []);
+      const who = [p].concat($('#ms-both') && $('#ms-both').checked ? qs : []);
       for (const x of who) { const meals = Object.assign({}, dailyOf(x, s).meals || {}); if (k) meals[i] = k; else delete meals[i]; await saveDaily(x, s, { meals }); }
       $('#mealsheet').close(); rerender();
     };
@@ -1435,7 +1442,7 @@
     const label = state.view === 'day' ? fmt(s, { weekday: 'short', day: 'numeric', month: 'short' }) : state.view === 'week' ? `Week ${w || '–'} · ${fmt(weekStartOf(s), { day: 'numeric', month: 'short' })} – ${fmt(addDays(weekStartOf(s), 6), { day: 'numeric', month: 'short' })}` : fmt(s, { month: 'long', year: 'numeric' });
     const whoBtn = (k, l, c) => `<button data-who="${k}" aria-pressed="${state.who === k}" style="${state.who === k ? `background:${c};border-color:${c};color:var(--surface)` : ''}">${esc(l)}</button>`;
     return `<div class="viewbar card"><div class="row between"><div class="seg-ctl" role="group" aria-label="View">${[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([k, l]) => `<button data-view="${k}" aria-pressed="${state.view === k}">${l}</button>`).join('')}</div>
-      <div class="seg-ctl" role="group" aria-label="Who">${whoBtn('a', n.a, 'var(--him)')}${whoBtn('b', n.b, 'var(--her)')}${whoBtn('both', 'Both', 'var(--ink)')}</div></div>
+      <div class="seg-ctl" role="group" aria-label="Who">${PIDS().map((k) => whoBtn(k, n[k], pcol(k))).join('')}${whoBtn('both', PIDS().length > 2 ? 'Everyone' : 'Both', 'var(--ink)')}</div></div>
       <div class="row between"><div class="row"><button class="btn sm" data-step="-1" aria-label="Previous">‹</button><strong class="vlabel">${esc(label)}</strong><button class="btn sm" data-step="1" aria-label="Next">›</button></div><div class="row"><button class="btn sm" data-step="0">Today</button><input type="date" id="daypick" value="${s}" min="${P.START}" max="${END}" class="btn sm" aria-label="Pick a date"></div></div></div>`;
   }
   function bindViewBar(v) {
@@ -1480,14 +1487,14 @@
       ${st.prs ? `<div class="stat"><span class="v">${st.prs}</span><span class="l">New bests</span></div>` : ''}</div></div>`;
   }
   function renderOverview(v) {
-    const n = names(), s = state.date, whos = state.who === 'both' ? ['a', 'b'] : [state.who], today = todayCairo();
+    const n = names(), s = state.date, whos = state.who === 'both' || !PIDS().includes(state.who) ? PIDS() : [state.who], today = todayCairo();
     let body = '';
     if (state.view === 'day') {
-      const D = dayPlan(s), ids = ['weigh', 'supps', 'swim', 'gym', 'food'].filter((id) => ['a', 'b'].some((p) => tasksFor(p, s).some((t) => t.id === id)));
-      body = `<div class="grid2">${['a', 'b'].map((p) => { const t = tasksFor(p, s), d = t.filter((x) => x.done).length; return `<div class="card both-head"><div>${ring(d, t.length, pcol(p))}</div><div><h3 style="color:${pcol(p)}">${esc(n[p])}</h3><span class="small muted">${d === t.length ? 'Day complete' : `${t.length - d} left`} · ${streak(p)}-day streak</span><br><button class="btn sm" data-goday="${s}" data-gowho="${p}">Open ${esc(n[p])}'s checklist</button></div></div>`; }).join('')}</div>
+      const D = dayPlan(s), ids = ['weigh', 'supps', 'swim', 'gym', 'food'].filter((id) => PIDS().some((p) => tasksFor(p, s).some((t) => t.id === id)));
+      body = `<div class="grid2">${PIDS().map((p) => { const t = tasksFor(p, s), d = t.filter((x) => x.done).length; return `<div class="card both-head"><div>${ring(d, t.length, pcol(p))}</div><div><h3 style="color:${pcol(p)}">${esc(n[p])}</h3><span class="small muted">${d === t.length ? 'Day complete' : `${t.length - d} left`} · ${streak(p)}-day streak</span><br><button class="btn sm" data-goday="${s}" data-gowho="${p}">Open ${esc(n[p])}'s checklist</button></div></div>`; }).join('')}</div>
         <div class="card"><div class="row between"><h3>${esc(D.name)}</h3><div class="row">${D.swim ? `<span class="chip swim">Swim ${esc(D.swim)}</span>` : ''}${D.gym ? `<span class="chip gym">${esc(P.SESSIONS[D.gym].short)}</span>` : ''}${D.type === 'rest' ? '<span class="chip rest">Rest day</span>' : ''}</div></div>
-        <div class="logtable"><table class="cmp"><thead><tr><th></th><th style="color:var(--him)">${esc(n.a)}</th><th style="color:var(--her)">${esc(n.b)}</th></tr></thead><tbody>
-        ${ids.map((id) => `<tr><td><strong>${TLABEL[id]}</strong></td>${['a', 'b'].map((p) => { const t = tasksFor(p, s).find((x) => x.id === id); return `<td>${t ? `<span class="cell-in">${check(t.done)}<span class="small">${esc(taskDetail(p, s, id))}</span></span>` : '<span class="muted small">–</span>'}</td>`; }).join('')}</tr>`).join('')}
+        <div class="logtable"><table class="cmp"><thead><tr><th></th>${PIDS().map((k) => `<th style="color:${pcol(k)}">${esc(n[k])}</th>`).join('')}</tr></thead><tbody>
+        ${ids.map((id) => `<tr><td><strong>${TLABEL[id]}</strong></td>${PIDS().map((p) => { const t = tasksFor(p, s).find((x) => x.id === id); return `<td>${t ? `<span class="cell-in">${check(t.done)}<span class="small">${esc(taskDetail(p, s, id))}</span></span>` : '<span class="muted small">–</span>'}</td>`; }).join('')}</tr>`).join('')}
         </tbody></table></div></div>`;
     } else if (state.view === 'week') {
       const ws = weekStartOf(s), we = addDays(ws, 6), days = [...Array(7)].map((_, i) => addDays(ws, i));
@@ -1598,19 +1605,19 @@
 
   /* ================= Health ================= */
   function renderHealth() {
-    const H = P.HEALTH, n = names(), p = state.healthP || me || 'a';
-    const tests = H.tests.filter((t) => t.who === 'both' || t.who === p);
+    const H = P.HEALTH, n = names(), p = PIDS().includes(state.healthP) ? state.healthP : PIDS().includes(me) ? me : PIDS()[0];
+    const sexKey = baseKey(p); const tests = H.tests.filter((t) => t.who === 'both' || t.who === sexKey);
     const doc = (r) => findDoc('health', p + '_' + r) || {};
     $('#v-health').innerHTML = `
       <div class="card"><div class="row between"><h2>Bloodwork + health checks</h2>${statusEl()}</div>
       <p class="muted">A baseline before week 1 and a re-check in week 10 show what the training and diet are doing inside, not just on the scale. ${esc(H.labs)}</p>
       <div class="row">${H.rounds.map((r) => `<span class="chip dl">${esc(r.label)}: ${esc(r.when)}</span>`).join('')}</div></div>
       <div class="grid2"><div class="card"><h3>Before the blood test</h3><ul class="clean">${H.prep.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
-      <div class="card"><h3>Other checks</h3><dl class="kv">${H.other.map((x) => `<dt>${esc(x.n.replace('Yousr', n.b))}</dt><dd>${esc(x.why.replace('Yousr', n.b))}</dd>`).join('')}</dl></div></div>
-      <div class="card"><div class="row between"><h3>Tests to ask for</h3><div class="blockpick">${['a', 'b'].map((k) => `<button data-hp="${k}" aria-pressed="${k === p}">${esc(n[k])}</button>`).join('')}</div></div>
+      <div class="card"><h3>Other checks</h3><dl class="kv">${H.other.map((x) => `<dt>${esc(x.n)}</dt><dd>${esc(x.why)}</dd>`).join('')}</dl></div></div>
+      <div class="card"><div class="row between"><h3>Tests to ask for</h3><div class="blockpick">${PIDS().map((k) => `<button data-hp="${k}" aria-pressed="${k === p}">${esc(n[k])}</button>`).join('')}</div></div>
       <p class="small muted">Write your results in as you get them (value and unit, e.g. "45 ng/mL"). Bring the list to your doctor to read them with you.</p>
       <div class="logtable"><table class="htable"><thead><tr><th>Test</th><th>Why</th>${H.rounds.map((r) => `<th>${esc(r.label)}</th>`).join('')}</tr></thead><tbody>
-      ${tests.map((t) => `<tr><td><strong>${esc(t.n)}</strong>${t.optional ? ' <span class="chip">Optional</span>' : ''}${t.key === p ? ' <span class="chip dl">Important for you</span>' : ''}</td><td class="small">${esc(t.why.replace('Yousr', n.b).replace("Ahmed's", n.a + "'s"))}</td>${H.rounds.map((r) => `<td><input type="text" class="hval" id="hv-${r.id}-${t.id}" data-r="${r.id}" data-t="${t.id}" value="${esc((doc(r.id).values || {})[t.id] || '')}" maxlength="40" aria-label="${esc(t.n)} ${esc(r.label)}"></td>`).join('')}</tr>`).join('')}
+      ${tests.map((t) => `<tr><td><strong>${esc(t.n)}</strong>${t.optional ? ' <span class="chip">Optional</span>' : ''}${t.key === sexKey ? ' <span class="chip dl">Important for you</span>' : ''}</td><td class="small">${esc(t.why.replace('Yousr', n.b).replace("Ahmed's", n.a + "'s"))}</td>${H.rounds.map((r) => `<td><input type="text" class="hval" id="hv-${r.id}-${t.id}" data-r="${r.id}" data-t="${t.id}" value="${esc((doc(r.id).values || {})[t.id] || '')}" maxlength="40" aria-label="${esc(t.n)} ${esc(r.label)}"></td>`).join('')}</tr>`).join('')}
       </tbody></table></div><button class="btn primary" id="h-save" ${ro()}>Save ${esc(n[p])}'s results</button></div>
       <p class="small muted">General information to discuss with your doctor, not medical advice. A doctor should interpret the results and decide on any treatment or supplement changes.</p>`;
     $$('[data-hp]').forEach((x) => (x.onclick = () => { state.healthP = x.dataset.hp; renderHealth(); }));
@@ -1663,7 +1670,7 @@
     if (e.target.id !== 'imp-file' || !e.target.files[0]) return;
     let j; try { j = JSON.parse(await e.target.files[0].text()); } catch (err) { setStatus('That file isn\'t a backup from this plan.', 'warn'); return; }
     const data = j.data || {}; let n = 0;
-    if (j.cfg) { for (const k of ['names', 'supps', 'settings', 'profile']) if (j.cfg[k]) await putCfg(k, j.cfg[k]); } else if (j.names) await putCfg('names', j.names);
+    if (j.cfg) { for (const k of ['names', 'supps', 'settings', 'profile', 'people']) if (j.cfg[k]) await putCfg(k, j.cfg[k]); } else if (j.names) await putCfg('names', j.names);
     if (sb) {
       const rows = []; COLS.forEach((c) => (data[c] || []).forEach((d) => { const x = Object.assign({}, d); const id = x._id; delete x._id; if (id) rows.push({ col: c, id, data: x, updated_at: new Date().toISOString() }); }));
       for (let i = 0; i < rows.length; i += 200) { const { error } = await sb.from('docs').upsert(rows.slice(i, i + 200)); if (error) { sbErr(error, 'import'); return; } }
@@ -1698,9 +1705,10 @@
   }
   function renderSetup() {
     const n = names(), st = cfg.settings.start || P.START;
-    const card = (k) => { const pr = cfg.profile[k]; const inp = (f, label, step, min, max) => `<label for="pf-${k}-${f}">${label}<input type="number" id="pf-${k}-${f}" step="${step}" min="${min}" max="${max}" inputmode="decimal" value="${pr[f]}"></label>`;
-      return `<div class="card" data-pcard="${k}"><div class="row between"><h3 style="color:${pcol(k)}">${esc(n[k])}</h3><button class="btn primary sm" data-psave="${k}" ${ro()}>Save ${esc(n[k])}'s profile</button></div>
+    const card = (k) => { const pr = cfg.profile[k] || Object.assign({}, PROFILE_DEFAULT.b); const inp = (f, label, step, min, max) => `<label for="pf-${k}-${f}">${label}<input type="number" id="pf-${k}-${f}" step="${step}" min="${min}" max="${max}" inputmode="decimal" value="${pr[f]}"></label>`;
+      return `<div class="card" data-pcard="${k}"><div class="row between"><h3 style="color:${pcol(k)}">${esc(n[k])}</h3><div class="row"><button class="btn primary sm" data-psave="${k}" ${ro()}>Save</button>${PIDS().length > 1 ? `<button class="link" data-premove="${k}" ${ro()}>Remove</button>` : ''}</div></div>
         <form class="log pform" onsubmit="return false">
+          <label for="pf-${k}-name">Name<input type="text" id="pf-${k}-name" maxlength="24" value="${esc(n[k])}"></label>
           <label for="pf-${k}-sex">Sex<select id="pf-${k}-sex"><option value="m" ${pr.sex === 'm' ? 'selected' : ''}>Male</option><option value="f" ${pr.sex === 'f' ? 'selected' : ''}>Female</option></select></label>
           ${inp('age', 'Age', 1, 14, 90)}${inp('height', 'Height (cm)', 1, 120, 220)}${inp('weight', 'Starting weight (kg)', 0.1, 35, 250)}${inp('target', 'Target weight (kg)', 0.1, 35, 250)}
           <label for="pf-${k}-rate">Expected loss per week<select id="pf-${k}-rate">${RATES.map((r) => `<option value="${r}" ${pr.rate == r ? 'selected' : ''}>−${r} kg/week${r === 0.5 && k === 'a' || r === 0.4 && k === 'b' ? ' (suggested)' : ''}</option>`).join('')}</select></label>
@@ -1713,7 +1721,9 @@
         <div class="row"><label class="small muted" for="st-date">Start</label><input type="date" id="st-date" value="${st}" class="btn"><button class="btn primary" id="st-save" ${ro()}>Save start date</button></div>
         <p id="st-prev">${preview(st)}</p>
         <p class="small muted">Changing it moves the whole schedule, the check-ins, the InBody and bloodwork dates and the free days. Your logs stay where they are, by date. Ramadan (expected from ${fmt(R.start, { day: 'numeric', month: 'short' })}) shows up wherever it overlaps.</p></div>
-      <div class="grid2">${card('a')}${card('b')}</div>
+      <div class="row between"><h2>People</h2><button class="btn primary" id="p-add" ${ro()}>Add a person</button></div>
+      <p class="muted" style="margin-top:-10px">Everyone follows the same swims and sessions; each person gets their own calorie targets, portions, supplements, logs and progress. Removing someone hides them from the plan but keeps their logs.${sb ? ' Each person who signs in needs their email in the Supabase allow-list.' : ''}</p>
+      <div class="grid2">${PIDS().map(card).join('')}</div>
       <div class="card"><h3>How the numbers work</h3><ul class="clean">
         <li>Resting burn uses the Mifflin-St Jeor formula, then ×1.65 for desk days plus 8 sessions a week.</li>
         <li>Each 1 kg of fat is about 7,700 kcal, so −0.5 kg/week is a deficit of about 550 kcal a day.</li>
@@ -1723,16 +1733,34 @@
     const sd = $('#st-date');
     sd.onchange = () => { if (!sd.value) return; const v = snap(sd.value); sd.value = v; $('#st-prev').innerHTML = preview(v); };
     $('#st-save').onclick = () => { const v = snap(sd.value || st); state.date = null; state.gweek = null; putCfg('settings', Object.assign({}, cfg.settings, { start: v, freeDays: null })); clearDirty($('#v-setup')); };
-    ['a', 'b'].forEach((k) => {
+    PIDS().forEach((k) => {
       $$(`[data-pcard="${k}"] input, [data-pcard="${k}"] select`).forEach((i) => (i.oninput = i.onchange = () => { const pr = readProfile(k); if ([pr.age, pr.height, pr.weight, pr.target, pr.rate].some((x) => x == null)) return; $('#pst-' + k).innerHTML = profileStats(k, pr); }));
     });
-    $$('[data-psave]').forEach((b) => (b.onclick = () => { const k = b.dataset.psave, pr = readProfile(k); if ([pr.age, pr.height, pr.weight, pr.target, pr.rate].some((x) => x == null)) return setStatus('Fill in every field before saving.', 'warn'); putCfg('profile', Object.assign({}, cfg.profile, { [k]: pr })); clearDirty($(`[data-pcard="${k}"]`)); }));
+    $$('[data-psave]').forEach((b) => (b.onclick = async () => {
+      const k = b.dataset.psave, pr = readProfile(k), nm = $(`#pf-${k}-name`).value.trim();
+      if (!nm || [pr.age, pr.height, pr.weight, pr.target, pr.rate].some((x) => x == null)) return setStatus('Fill in every field before saving.', 'warn');
+      await putCfg('profile', Object.assign({}, cfg.profile, { [k]: pr }));
+      if (k === 'a' || k === 'b') { if (nm !== cfg.names[k]) await putCfg('names', Object.assign({}, cfg.names, { [k]: nm })); }
+      else await putCfg('people', { list: cfg.people.list.map((x) => (x.id === k ? Object.assign({}, x, { name: nm }) : x)) });
+      clearDirty($(`[data-pcard="${k}"]`));
+    }));
+    $$('[data-premove]').forEach((b) => (b.onclick = () => {
+      if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Tap again to remove'; return; }
+      const k = b.dataset.premove; putCfg('people', { list: cfg.people.list.filter((x) => x.id !== k) });
+    }));
+    const add = $('#p-add'); if (add) add.onclick = async () => {
+      const id = 'p' + Date.now().toString(36), used = cfg.people.list.map((x) => x.color).filter(Boolean);
+      const color = PALETTE.find((c) => !used.includes(c)) || PALETTE[cfg.people.list.length % PALETTE.length];
+      await putCfg('profile', Object.assign({}, cfg.profile, { [id]: { sex: 'f', age: 30, height: 165, weight: 70, target: 65, rate: 0.4 } }));
+      await putCfg('people', { list: cfg.people.list.concat([{ id, name: 'New person', color }]) });
+      setStatus('Added. Fill in their details and tap Save.', 'good');
+    };
   }
 
   /* ================= Badges block for Analytics ================= */
   function badgesHTML() {
     const n = names();
-    return `<div class="grid2">${['a', 'b'].map((p) => { const e = badges(p); return `<div class="card"><div class="row between"><h3 style="color:${pcol(p)}">${esc(n[p])}'s badges</h3><span class="chip">${e.size} / ${P.BADGES.length}</span></div><div class="badges">${P.BADGES.map((x) => `<div class="bdg ${e.has(x.id) ? 'got' : ''}"><span class="badge-ic ${e.has(x.id) ? '' : 'locked'}" style="${e.has(x.id) ? `background:${pcol(p)}` : ''}" aria-hidden="true"></span><span><strong>${esc(x.n)}</strong><br><span class="small muted">${esc(x.d)}</span></span></div>`).join('')}</div>
+    return `<div class="grid2">${PIDS().map((p) => { const e = badges(p); return `<div class="card"><div class="row between"><h3 style="color:${pcol(p)}">${esc(n[p])}'s badges</h3><span class="chip">${e.size} / ${P.BADGES.length}</span></div><div class="badges">${P.BADGES.map((x) => `<div class="bdg ${e.has(x.id) ? 'got' : ''}"><span class="badge-ic ${e.has(x.id) ? '' : 'locked'}" style="${e.has(x.id) ? `background:${pcol(p)}` : ''}" aria-hidden="true"></span><span><strong>${esc(x.n)}</strong><br><span class="small muted">${esc(x.d)}</span></span></div>`).join('')}</div>
       <p class="small muted">${streak(p)}-day streak · ${prList(p).length} personal bests · ${(store.swims.filter((x) => x.person === p).reduce((a, x) => a + (x.dist || 0), 0) / 1000).toFixed(1)} km swum</p></div>`; }).join('')}</div>`;
   }
 
@@ -1776,9 +1804,9 @@
     VIEWS[c](); restoreDirty(); window.scrollTo(0, y);
     if (f) { const i = document.getElementById(f); if (i && i.focus) i.focus({ preventScroll: true }); }
   }
-  function renderAll() { applyPlan(); $('#who').textContent = names().a + ' & ' + names().b; if (current() === 'timer') { drawTimer(); return; } rerender(); }
+  function renderAll() { applyPlan(); $('#who').textContent = PIDS().map((k) => names()[k]).join(' & '); if (current() === 'timer') { drawTimer(); return; } rerender(); }
   window.addEventListener('hashchange', show);
-  $('#who').textContent = names().a + ' & ' + names().b;
+  $('#who').textContent = PIDS().map((k) => names()[k]).join(' & ');
   show();
   initDb();
 })();

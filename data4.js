@@ -18,7 +18,7 @@
       { id: 'ferritin', n: 'Ferritin + iron panel (iron, TIBC, transferrin saturation)', who: 'both', why: 'Iron stores. Heavy training and dieting both drain iron; especially important for Yousr. Ask the doctor what range they want for an endurance athlete.', key: 'b' },
       { id: 'crp', n: 'hs-CRP', who: 'both', why: 'Inflammation. Also needed to read ferritin correctly, since inflammation pushes ferritin up.' },
       { id: 'vitd', n: 'Vitamin D (25-OH)', who: 'both', why: 'Sets the right D3 dose for both of you.' },
-      { id: 'b12', n: 'Vitamin B12 + folate', who: 'both', why: 'Energy and red blood cells. Ahmed\'s will read high on a B-complex; that\'s expected.' },
+      { id: 'b12', n: 'Vitamin B12 + folate', who: 'both', why: 'Energy and red blood cells. Anyone taking a B-complex will read high; that\'s expected.' },
       { id: 'a1c', n: 'HbA1c + fasting glucose', who: 'both', why: 'Blood-sugar baseline. Weight loss and training should improve it.' },
       { id: 'lipids', n: 'Lipid profile (cholesterol, LDL, HDL, triglycerides)', who: 'both', why: 'Heart-health baseline. Usually improves with fat loss.' },
       { id: 'thyroid', n: 'TSH + free T4', who: 'both', why: 'Thyroid drives metabolism, energy and how easily weight comes off.' },
@@ -36,7 +36,7 @@
       { n: 'Blood pressure + resting heart rate', why: 'At home, seated, first thing in the morning, once a month. Resting heart rate drifting up for days is an early sign of overtraining or illness.' },
       { n: 'Doctor check / ECG', why: 'Before starting if either of you has a family history of heart disease or sudden death, or ever gets chest pain, fainting or palpitations during exercise.' },
       { n: 'Shoulder and movement screen with a sports physio', why: 'One session at the start. Swimmers\' shoulders take the most load, and catching an imbalance early is cheaper than an injury.' },
-      { n: 'Cycle changes (Yousr)', why: 'If her period becomes irregular or stops during the diet, tell a doctor. With this much training it can be a sign of not eating enough (low energy availability), and the fix is more food, not more discipline.' }
+      { n: 'Cycle changes (women)', why: 'If a period becomes irregular or stops during the diet, tell a doctor. With this much training it can be a sign of not eating enough (low energy availability), and the fix is more food, not more discipline.' }
     ],
     labs: 'Large lab chains in Cairo offer these panels and home sample collection; ask for a "sports" or "full check-up" package and add the extra tests.'
   };

@@ -382,8 +382,8 @@
       ['After the swim', 'Within 60 min, eat protein plus carbs. After the evening swims, that\'s dinner itself. Plan it so post-swim hunger doesn\'t take over.']
     ],
     hydration: [
-      ['Him', '≈ 3.5 L/day baseline + 500–750 ml per training hour'],
-      ['Her', '≈ 2.5 L/day baseline + 500–750 ml per training hour'],
+      ['Men', '≈ 3.5 L/day baseline + 500–750 ml per training hour'],
+      ['Women', '≈ 2.5 L/day baseline + 500–750 ml per training hour'],
       ['Check', 'Pale-yellow urine by midday. You sweat in the pool even if you don\'t feel it.']
     ],
     supplements: [

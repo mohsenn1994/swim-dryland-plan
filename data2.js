@@ -138,7 +138,7 @@
       { date: '2027-02-05', label: 'Final (pre-Ramadan)', note: 'Friday of week 10, the last reading with normal hydration' },
       { date: '2027-02-19', label: 'Optional end check', note: 'Friday of week 12. If you\'re fasting, hydration will skew it: compare with care' }
     ],
-    inbodyRules: ['Morning, after the bathroom, nothing to eat or drink for 3+ hours (overnight is best).', 'No training, swimming, sauna or hot shower before the test. Thursday morning training is fine; Friday is rest.', 'No caffeine or alcohol the evening before, and avoid a very salty dinner.', 'Same machine, same time of day, metal off, feet and hands clean and dry.', 'For Yousr: readings are most comparable at the same point in her monthly cycle; the days just before a period can add water weight.', 'Focus on fat mass and skeletal muscle mass trends, not body-fat % from a single test.']
+    inbodyRules: ['Morning, after the bathroom, nothing to eat or drink for 3+ hours (overnight is best).', 'No training, swimming, sauna or hot shower before the test. Thursday morning training is fine; Friday is rest.', 'No caffeine or alcohol the evening before, and avoid a very salty dinner.', 'Same machine, same time of day, metal off, feet and hands clean and dry.', 'For women: readings are most comparable at the same point in the monthly cycle; the days just before a period can add water weight.', 'Focus on fat mass and skeletal muscle mass trends, not body-fat % from a single test.']
   };
 
   P.UNITS = {
