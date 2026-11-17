@@ -239,7 +239,6 @@ table.ing td:last-child { text-align: right; color: var(--muted); }
   .mainnav a { flex-direction: column; gap: 2px; font-size: 11px; padding: 8px 6px; border-bottom: 0; border-top: 3px solid transparent; }
   .mainnav a[aria-current="page"] { border-top-color: var(--accent); }
   .subnavbar { position: sticky; top: 0; z-index: 15; }
-  main { padding-bottom: 96px; }
   header.top .wrap { padding: 14px 16px 10px; }
   header.top h1 { font-size: 22px; }
   header.top .sub { display: none; }
@@ -436,6 +435,20 @@ dialog.wo { width: min(760px, 100vw); max-width: 100vw; height: min(920px, 100dv
   .card { padding: 14px; }
   h2 { font-size: 23px; }
 }
+
+/* Spacing between header, content and footer */
+main.wrap { padding-top: 28px; padding-bottom: 48px; }
+section.view.on { gap: 24px; }
+.subnavbar + main.wrap { padding-top: 24px; }
+.foot { border-top: 1px solid var(--line); background: var(--surface); }
+.foot-in { display: flex; flex-wrap: wrap; gap: 6px 20px; justify-content: space-between; align-items: center; padding-top: 20px; padding-bottom: 24px; font-size: 13px; color: var(--muted); }
+.foot-in a, .foot-in .link { color: var(--muted); font-size: 13px; }
+.foot-in nav { display: flex; gap: 16px; flex-wrap: wrap; }
+@media (max-width: 700px) {
+  main.wrap { padding-top: 16px; padding-bottom: 28px; }
+  section.view.on { gap: 16px; }
+  .foot-in { padding-bottom: calc(88px + env(safe-area-inset-bottom)); flex-direction: column; align-items: flex-start; }
+}
 @media (max-width: 520px) { .grid2.wide { grid-template-columns: 1fr; } }
 .stack { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .grid2.tight { gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
@@ -514,6 +527,7 @@ details[open] summary { margin-bottom: 8px; }
   <section class="view" id="v-training"></section>
   <section class="view" id="v-analytics"></section>
 </main>
+<footer class="foot"><div class="wrap foot-in" id="foot"></div></footer>
 <div id="login" class="login" hidden></div>
 <dialog id="mealsheet" class="sheet" aria-labelledby="mealsheet-title"><div id="mealsheet-body" class="modal"></div></dialog>
 <dialog id="sessdlg" class="sheet" aria-labelledby="sessdlg-title"><div id="sessdlg-body" class="modal"></div></dialog>
