@@ -128,18 +128,19 @@
     const { data: allowed } = await sb.from('allowed_users').select('email').eq('email', (sbUser.email || '').toLowerCase());
     if (!allowed || !allowed.length) { mode = 'readonly'; setStatus('Signed in as ' + sbUser.email + ', but this email isn\'t on the allowed list.', 'warn'); renderAll(); return; }
     let from = 0; for (;;) { const { data, error } = await sb.from('docs').select('col,id,data').range(from, from + 999); if (error) { sbErr(error, 'load'); break; } data.forEach((r) => applyRow(r)); if (data.length < 1000) break; from += 1000; }
-    renderAll(); setStatus('Shared log · signed in as ' + sbUser.email, '');
+    renderAll(); applyPlan(); setStatus('Shared log · signed in as ' + sbUser.email, '');
     let pending = null; const soon = () => { if (pending) return; pending = setTimeout(() => { pending = null; renderAll(); }, 150); };
     sbChannel = sb.channel('docs').on('postgres_changes', { event: '*', schema: 'public', table: 'docs' }, (p) => { if (p.eventType === 'DELETE') applyRow(p.old, true); else applyRow(p.new); soon(); }).subscribe();
   }
   async function initSupabase() {
     sb = window.supabase.createClient(SBC.url, SBC.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    sb.auth.onAuthStateChange((ev, session) => { if (session && (ev === 'SIGNED_IN' || ev === 'INITIAL_SESSION')) sbStart(session); if (ev === 'SIGNED_OUT') { sbUser = null; if (sbChannel) sb.removeChannel(sbChannel); showLogin(); } });
+    sb.auth.onAuthStateChange((ev, session) => { if (session && (ev === 'SIGNED_IN' || ev === 'INITIAL_SESSION')) sbStart(session); if (ev === 'SIGNED_OUT') { sbUser = null; if (sbChannel) sb.removeChannel(sbChannel); sbChannel = null; COLS.forEach((c) => (store[c] = [])); showLogin('You\'re signed out.'); } });
     const { data: { session } } = await sb.auth.getSession();
     if (!session) showLogin(); else sbStart(session);
   }
   const signedInAs = () => (sb && sbUser ? sbUser.email : null);
-  window.__signOut = () => sb && sb.auth.signOut();
+  async function signOut() { if (!sb) return; try { await sb.auth.signOut(); } catch (e) { /* ignore */ } }
+  document.addEventListener('click', (e) => { const b = e.target.closest('[data-signout]'); if (!b) return; e.preventDefault(); if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Tap again to sign out'; setTimeout(() => { b.dataset.confirm = ''; b.textContent = 'Sign out'; }, 4000); return; } signOut(); });
 
   async function initDb() {
     if (SBC && SBC.url && window.supabase) return initSupabase();
@@ -197,6 +198,7 @@
     P.HEALTH.rounds[0].when = `${F(addDays(P.START, -2))} or ${F(addDays(P.START, -1))}, before week 1`;
     P.HEALTH.rounds[1].when = `${F(addDays(P.START, 63))} (week 10)`;
     P.BENCH.rounds.forEach((r) => { const w = +r.id.slice(1); r.when = `${F(weekStart(w))} – ${F(addDays(weekStart(w), 6))}`; });
+    const ft = $('#foot'); if (ft) ft.innerHTML = `<span>Swim &amp; Dry-Land 12-Week Plan · ${F(P.START)} – ${F(END)} ${toD(END).getUTCFullYear()}</span><nav aria-label="Footer"><a href="#setup">Profiles + start date</a><a href="#analytics">Back up your data</a><a href="#health">Bloodwork</a>${signedInAs() ? `<span>Signed in as ${esc(signedInAs())}</span><button class="link" data-signout>Sign out</button>` : ''}</nav>`;
     const sub = $('#subtitle'); if (sub) sub.textContent = `${F(P.START)} ${toD(P.START).getUTCFullYear()} – ${F(END)} ${toD(END).getUTCFullYear()} · 4 swims + 4 dry-land sessions a week`;
   }
 
@@ -1654,7 +1656,7 @@
   function backupCard() {
     return `<div class="card"><div class="row between"><h3>Back up your data</h3><span class="status ${statusCls}" data-status>${esc(statusMsg)}</span></div><p class="small muted">Download any log as a spreadsheet (CSV opens in Excel, Numbers or Google Sheets), or everything in one file.</p>
       <div class="row">${Object.keys(CSVCOLS).map((c) => `<button class="btn sm" data-csv="${c}">${LABELS[c]} (${store[c].length})</button>`).join('')}<button class="btn sm primary" data-csv="all">Everything</button></div>
-      <div class="row"><label class="btn sm" for="imp-file">Import a backup (.json)</label><input type="file" id="imp-file" accept="application/json,.json" hidden ${ro()}>${signedInAs() ? `<span class="small muted">Signed in as ${esc(signedInAs())}</span><button class="link" onclick="window.__signOut()">Sign out</button>` : ''}</div></div>`;
+      <div class="row"><label class="btn sm" for="imp-file">Import a backup (.json)</label><input type="file" id="imp-file" accept="application/json,.json" hidden ${ro()}>${signedInAs() ? `<span class="small muted">Signed in as ${esc(signedInAs())}</span><button class="link" data-signout>Sign out</button>` : ''}</div></div>`;
   }
   document.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-csv]'); if (!b) return;
@@ -1717,6 +1719,7 @@
     const snap = (d) => addDays(d, (6 - dow(d) + 7) % 7);
     const preview = (d) => { const e = addDays(d, 83); return `Week 1 starts <strong>${fmt(d, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</strong> and week 12 ends ${fmt(e, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}. Baseline bloodwork and InBody: ${fmt(addDays(d, -2), { day: 'numeric', month: 'short' })}–${fmt(addDays(d, -1), { day: 'numeric', month: 'short' })}.`; };
     $('#v-setup').innerHTML = `
+      ${signedInAs() ? `<div class="card"><div class="row between"><div><h3>Account</h3><span class="muted small">Signed in as ${esc(signedInAs())}</span></div><button class="btn" data-signout>Sign out</button></div><p class="small muted">Signing out removes your logs from this device's screen; they stay safe in the database. Sign back in with your email any time.</p></div>` : ''}
       <div class="card"><div class="row between"><h2>Start date</h2>${statusEl()}</div>
         <p class="muted">Your training week starts on Saturday with the 1 pm swim, so the plan always starts on a Saturday. Pick any date and it moves to the next Saturday.</p>
         <div class="row"><label class="small muted" for="st-date">Start</label><input type="date" id="st-date" value="${st}" class="btn"><button class="btn primary" id="st-save" ${ro()}>Save start date</button></div>
