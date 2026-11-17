@@ -10,7 +10,7 @@
   const diffDays = (a, b) => Math.round((toD(b) - toD(a)) / DAYMS);
   const fmt = (s, o) => toD(s).toLocaleDateString('en-GB', Object.assign({ timeZone: 'UTC' }, o || { weekday: 'short', day: 'numeric', month: 'short' }));
   const todayCairo = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const END = addDays(P.START, P.WEEKS * 7 - 1);
+  let END = addDays(P.START, P.WEEKS * 7 - 1);
   const weekOf = (s) => { const d = diffDays(P.START, s); return d < 0 || d >= P.WEEKS * 7 ? null : Math.floor(d / 7) + 1; };
   const weekStart = (w) => addDays(P.START, (w - 1) * 7);
   const baseBlock = (w) => (w === 4 || w === 8 || w === 12 ? 'dl' : w <= 3 ? 'b1' : w <= 7 ? 'b2' : 'b3');
@@ -34,7 +34,8 @@
   /* ================= Store ================= */
   const COLS = ['log', 'sessions', 'swims', 'daily', 'bench', 'inbody', 'health', 'reviews'];
   const store = { log: [], sessions: [], swims: [], daily: [], bench: [], inbody: [], health: [], reviews: [] };
-  const cfg = { names: { a: 'Ahmed', b: 'Yousr' }, supps: { a: P.SUPPS.a, b: P.SUPPS.b }, settings: { ramadan: false } };
+  const PROFILE_DEFAULT = { a: { sex: 'm', age: 32, height: 180, weight: 96, target: 89.9, rate: 0.5 }, b: { sex: 'f', age: 29, height: 164, weight: 71, target: 65, rate: 0.4 } };
+  const cfg = { names: { a: 'Ahmed', b: 'Yousr' }, supps: { a: P.SUPPS.a, b: P.SUPPS.b }, settings: { ramadan: false, start: '2026-11-28' }, profile: JSON.parse(JSON.stringify(PROFILE_DEFAULT)) };
   let db = null, mode = 'loading', statusMsg = 'Connecting to the shared log…', statusCls = '';
   const LOCALKEY = 'swimplan-store-v2';
   const names = () => cfg.names;
@@ -43,7 +44,8 @@
 
   function persistLocal() { lsSet(LOCALKEY, { store, cfg }); }
   async function put(col, id, data) {
-    const rec = Object.assign({}, data);
+    const rec = Object.assign({}, data); delete rec._id;
+    if (sb) return sbPut(col, id, rec);
     if (!db) {
       store[col] = store[col].filter((d) => d._id !== id).concat([Object.assign({ _id: id }, rec)]);
       persistLocal(); setStatus('Saved on this device.', 'good'); rerender(); return true;
@@ -54,10 +56,12 @@
     return chains[key];
   }
   async function del(col, id) {
+    if (sb) { store[col] = store[col].filter((d) => d._id !== id); rerender(); const { error } = await sb.from('docs').delete().match({ col, id }); if (error) sbErr(error, 'delete'); return; }
     if (!db) { store[col] = store[col].filter((d) => d._id !== id); persistLocal(); rerender(); return; }
     try { await db.collection(col).doc(id).delete(); } catch (e) { handleDbErr(e, 'delete'); }
   }
   async function putCfg(name, data) {
+    if (sb) { cfg[name] = name === 'names' ? data : Object.assign({}, cfg[name], data); renderAll(); return sbPut('config', name, data); }
     if (!db) { cfg[name] = data; persistLocal(); renderAll(); return; }
     try { await db.doc('config/' + name).set(data); setStatus('Saved.', 'good'); } catch (e) { handleDbErr(e, 'save'); }
   }
@@ -75,7 +79,61 @@
     setStatus('Saving on this device only. Open the page on claude.ai to share the log between you.', 'warn');
     renderAll();
   }
+  /* ---- Supabase backend (used when config.js provides SUPABASE_CONFIG) ---- */
+  let sb = null, sbUser = null, sbChannel = null;
+  const SBC = window.SUPABASE_CONFIG || null;
+  function applyRow(row, removed) {
+    if (!row || !row.col) return;
+    if (row.col === 'config') { if (removed) return; const v = row.data || {}; if (row.id === 'names') cfg.names = { a: v.a || 'Ahmed', b: v.b || 'Yousr' }; else cfg[row.id] = Object.assign({}, cfg[row.id], v); return; }
+    if (!store[row.col]) return;
+    store[row.col] = store[row.col].filter((d) => d._id !== row.id);
+    if (!removed) store[row.col].push(Object.assign({ _id: row.id }, row.data));
+  }
+  async function sbPut(col, id, rec) {
+    if (col !== 'config') { store[col] = store[col].filter((d) => d._id !== id).concat([Object.assign({ _id: id }, rec)]); rerender(); }
+    const key = col + '/' + id;
+    const run = async () => { const { error } = await sb.from('docs').upsert({ col, id, data: rec, updated_at: new Date().toISOString() }); if (error) { sbErr(error, 'save'); return false; } setStatus('Saved.', 'good'); return true; };
+    chains[key] = (chains[key] || Promise.resolve()).then(run);
+    return chains[key];
+  }
+  function sbErr(e, what) {
+    if (e && (e.code === '42501' || /row-level security/i.test(e.message || ''))) { mode = 'readonly'; setStatus('This email isn\'t on the allowed list, so nothing was saved. Ask Ahmed to add it.', 'warn'); }
+    else setStatus('Couldn\'t ' + what + ' just now. Check your connection and try again.', 'warn');
+  }
+  function showLogin(msg) {
+    const box = $('#login'); box.hidden = false;
+    box.innerHTML = `<div class="login-card"><h2>Sign in</h2><p class="muted">Enter your email and we'll send you a sign-in link and a 6-digit code.</p>
+      <form id="lg-form" class="inline wrap"><input type="email" id="lg-email" required placeholder="you@example.com" autocomplete="email" aria-label="Email"><button class="btn primary" type="submit">Send code</button></form>
+      <form id="lg-code" class="inline wrap" hidden><input type="text" id="lg-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="6-digit code" aria-label="Code"><button class="btn primary" type="submit">Sign in</button></form>
+      <p class="small muted" id="lg-msg">${esc(msg || '')}</p></div>`;
+    $('#lg-form').onsubmit = async (e) => { e.preventDefault(); const email = $('#lg-email').value.trim(); $('#lg-msg').textContent = 'Sending…';
+      const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+      if (error) { $('#lg-msg').textContent = error.message; return; }
+      $('#lg-msg').textContent = 'Check your email: tap the link, or type the code here.'; $('#lg-code').hidden = false; $('#lg-otp').focus(); };
+    $('#lg-code').onsubmit = async (e) => { e.preventDefault(); const { error } = await sb.auth.verifyOtp({ email: $('#lg-email').value.trim(), token: $('#lg-otp').value.trim(), type: 'email' }); if (error) $('#lg-msg').textContent = error.message; };
+  }
+  async function sbStart(session) {
+    if (sbUser && session && sbUser.id === session.user.id) return;
+    sbUser = session.user; $('#login').hidden = true; mode = 'shared';
+    setStatus('Loading the shared log…', '');
+    const { data: allowed } = await sb.from('allowed_users').select('email').eq('email', (sbUser.email || '').toLowerCase());
+    if (!allowed || !allowed.length) { mode = 'readonly'; setStatus('Signed in as ' + sbUser.email + ', but this email isn\'t on the allowed list.', 'warn'); renderAll(); return; }
+    let from = 0; for (;;) { const { data, error } = await sb.from('docs').select('col,id,data').range(from, from + 999); if (error) { sbErr(error, 'load'); break; } data.forEach((r) => applyRow(r)); if (data.length < 1000) break; from += 1000; }
+    renderAll(); setStatus('Shared log · signed in as ' + sbUser.email, '');
+    let pending = null; const soon = () => { if (pending) return; pending = setTimeout(() => { pending = null; renderAll(); }, 150); };
+    sbChannel = sb.channel('docs').on('postgres_changes', { event: '*', schema: 'public', table: 'docs' }, (p) => { if (p.eventType === 'DELETE') applyRow(p.old, true); else applyRow(p.new); soon(); }).subscribe();
+  }
+  async function initSupabase() {
+    sb = window.supabase.createClient(SBC.url, SBC.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+    sb.auth.onAuthStateChange((ev, session) => { if (session && (ev === 'SIGNED_IN' || ev === 'INITIAL_SESSION')) sbStart(session); if (ev === 'SIGNED_OUT') { sbUser = null; if (sbChannel) sb.removeChannel(sbChannel); showLogin(); } });
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) showLogin(); else sbStart(session);
+  }
+  const signedInAs = () => (sb && sbUser ? sbUser.email : null);
+  window.__signOut = () => sb && sb.auth.signOut();
+
   async function initDb() {
+    if (SBC && SBC.url && window.supabase) return initSupabase();
     if (!window.claude || typeof window.claude.use !== 'function') return localMode();
     const timer = setTimeout(() => setStatus('Can\'t reach the shared log yet. Entries will appear once it connects.', 'warn'), 10000);
     let d = null;
@@ -89,9 +147,45 @@
       if (!snap.metadata.fromCache) { clearTimeout(timer); if (statusCls === 'warn' && mode === 'shared') setStatus('Shared log: entries sync between you.', ''); else if (statusMsg.startsWith('Connecting')) setStatus('Shared log: entries sync between you.', ''); }
       soon();
     }, (e) => { clearTimeout(timer); setStatus(e && e.code === 'revoked' ? 'The shared log isn\'t available in this view.' : 'The shared log stopped updating. Reopen the page to reconnect.', 'warn'); }));
-    ['names', 'supps', 'settings'].forEach((n) => db.doc('config/' + n).onSnapshot((s) => {
+    ['names', 'supps', 'settings', 'profile'].forEach((n) => db.doc('config/' + n).onSnapshot((s) => {
       if (s.exists) { const v = s.data(); if (n === 'names') cfg.names = { a: v.a || 'Ahmed', b: v.b || 'Yousr' }; else cfg[n] = Object.assign({}, cfg[n], v); renderAll(); }
     }, () => {}));
+  }
+
+  /* ================= Profiles, targets and start date ================= */
+  const r10 = (x) => Math.round(x / 10) * 10, r5 = (x) => Math.round(x / 5) * 5;
+  function calcTargets(pr, weight) {
+    const bmr = 10 * weight + 6.25 * pr.height - 5 * pr.age + (pr.sex === 'm' ? 5 : -161);
+    const maint = bmr * 1.65, def = (pr.rate * 7700) / 7, avg = maint - def, R = pr.sex === 'm' ? 500 : 350;
+    let train = r10(avg + R / 7), rest = r10(train - R);
+    const floor = r10(bmr + 100); if (rest < floor) { rest = floor; }
+    const p = r5(1.8 * weight), f = r5(0.8 * weight);
+    return { train, rest, p, f, cT: r5((train - p * 4 - f * 9) / 4), cR: r5((rest - p * 4 - f * 9) / 4), bmr: Math.round(bmr), maint: r10(maint), def: Math.round(def), avg: r10((train * 6 + rest) / 7) };
+  }
+  function planSummary(k) {
+    const pr = cfg.profile[k], toLose = Math.max(0, pr.weight - pr.target), weeks = pr.rate > 0 ? toLose / pr.rate : Infinity;
+    const at12 = Math.max(pr.target, pr.weight - pr.rate * P.WEEKS), needed = toLose / P.WEEKS, pctWk = (pr.rate / pr.weight) * 100;
+    const bmi = pr.weight / Math.pow(pr.height / 100, 2), tbmi = pr.target / Math.pow(pr.height / 100, 2);
+    return { toLose, weeks, at12, needed, pctWk, bmi, tbmi, end: addDays(P.START, Math.ceil(weeks * 7)) };
+  }
+  function applyPlan() {
+    P.START = cfg.settings.start || '2026-11-28';
+    END = addDays(P.START, P.WEEKS * 7 - 1);
+    FREE_DEFAULT = [2, 4, 6, 8, 10].map((w) => weekStart(w));
+    ['a', 'b'].forEach((k) => {
+      const pr = cfg.profile[k] = Object.assign({}, PROFILE_DEFAULT[k], cfg.profile[k] || {});
+      P.TARGETS.early[k] = calcTargets(pr, pr.weight);
+      P.TARGETS.late[k] = calcTargets(pr, Math.max(pr.target, pr.weight - pr.rate * 6));
+      Object.assign(PEOPLE[k], { start: pr.weight, target: pr.target, tLabel: pr.target + ' kg', min: +(pr.rate * 0.5).toFixed(2), max: +Math.max(pr.rate * 1.6, pr.rate + 0.3).toFixed(2) });
+      P.FLEX.freeKcal[k] = Math.round((calcTargets(pr, pr.weight).maint + 500) / 100) * 100;
+    });
+    P.TARGETS.late.note = 'Recalculated for the weight you should be at by week 6. Switch to these if the week-6 check-in shows your loss slowing.';
+    const F = (d, o) => fmt(d, o || { weekday: 'short', day: 'numeric', month: 'short' });
+    P.WEIGH.inbody = [{ date: addDays(P.START, -1), label: 'Baseline', note: 'Friday before week 1' }, { date: addDays(P.START, 41), label: 'Mid-point', note: 'Friday of week 6' }, { date: addDays(P.START, 69), label: 'Final', note: 'Friday of week 10' }];
+    P.HEALTH.rounds[0].when = `${F(addDays(P.START, -2))} or ${F(addDays(P.START, -1))}, before week 1`;
+    P.HEALTH.rounds[1].when = `${F(addDays(P.START, 63))} (week 10)`;
+    P.BENCH.rounds.forEach((r) => { const w = +r.id.slice(1); r.when = `${F(weekStart(w))} – ${F(addDays(weekStart(w), 6))}`; });
+    const sub = $('#subtitle'); if (sub) sub.textContent = `${F(P.START)} ${toD(P.START).getUTCFullYear()} – ${F(END)} ${toD(END).getUTCFullYear()} · 4 swims + 4 dry-land sessions a week`;
   }
 
   /* ================= Figures ================= */
@@ -213,7 +307,7 @@
   document.addEventListener('click', (e) => { const b = e.target.closest('[data-recipe]'); if (b) { e.preventDefault(); state.recipe = b.dataset.recipe; if (location.hash === '#recipes') renderRecipes(); else location.hash = '#recipes'; } });
   /* ================= Plan helpers ================= */
   const ramadanOn = () => !!cfg.settings.ramadan;
-  const inRamadan = (s) => s >= R.start;
+  const inRamadan = (s) => s >= R.start && s <= (R.end || '2027-03-09') && s >= P.START && s <= END;
   const dayPlan = (s) => (ramadanOn() && inRamadan(s) ? P.RDAYS : P.DAYS)[dow(s)];
   const blockFor = (s) => { const w = weekOf(s); if (!w) return 'b1'; if (ramadanOn() && inRamadan(s)) return 'dl'; return baseBlock(w); };
   const blockChip = (b, s) => `<span class="chip ${b === 'dl' ? 'dl' : 'gym'}">${s && ramadanOn() && inRamadan(s) ? 'Ramadan · deload volume' : BLOCKS[b].name}</span>`;
@@ -476,7 +570,7 @@
     $('#v-schedule').innerHTML = `
       <div class="card"><div class="row between"><h2>12-week schedule</h2><span class="muted small">Click a day to open its full plan</span></div>
       <div class="sched"><table><thead><tr><th>Week</th>${order.map((d) => `<th>${P.DAYS[d].name.slice(0, 3)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>
-      <p class="small muted">Baseline InBody is Friday 27 November, the day before week 1.</p></div>
+      <p class="small muted">Baseline InBody is ${fmt(addDays(P.START, -1), { weekday: 'long', day: 'numeric', month: 'long' })}, the day before week 1. <a href="#setup">Change the start date</a></p></div>
       <div class="grid3">${['b1', 'b2', 'b3', 'dl'].map((k) => `<div class="card"><div class="row between"><h3>${BLOCKS[k].name}</h3><span class="chip ${k === 'dl' ? 'dl' : ''}">${BLOCKS[k].weeks}</span></div><p class="muted">${BLOCKS[k].desc}</p></div>`).join('')}</div>
       ${ramadanCard()}
       <div class="card"><h3>Before a meet</h3><p>In race week, drop Thursday's session and make Saturday explosive work only (slams, throws, plyo push-ups).</p></div>`;
@@ -484,10 +578,11 @@
     bindRamadan($('#v-schedule'));
   }
   function ramadanCard() {
-    return `<div class="card"><div class="row between"><h3>Ramadan: weeks 11–12</h3><button class="btn sm" data-ramtoggle ${ro()}>${ramadanOn() ? 'Ramadan plan is on · turn off' : 'We\'re fasting · turn on Ramadan plan'}</button></div>
-      <p class="muted">Ramadan is expected to start on ${fmt(R.start, { weekday: 'long', day: 'numeric', month: 'long' })} (confirmed by moon sighting), covering the last 12 days of the program. In Cairo, fajr is ${R.fajr} and maghrib ${R.maghrib} in mid-February; check the exact times.</p>
+    return `<div class="card"><div class="row between"><h3>Ramadan${ramWeeks() ? ': weeks ' + ramWeeks() : ''}</h3><button class="btn sm" data-ramtoggle ${ro()}>${ramadanOn() ? 'Ramadan plan is on · turn off' : 'We\'re fasting · turn on Ramadan plan'}</button></div>
+      <p class="muted">Ramadan is expected to start on ${fmt(R.start, { weekday: 'long', day: 'numeric', month: 'long' })} (confirmed by moon sighting)${ramWeeks() ? ', which falls in weeks ' + ramWeeks() + ' of your plan' : ', after your 12 weeks end'}. In Cairo, fajr is ${R.fajr} and maghrib ${R.maghrib} in mid-February; check the exact times.</p>
       <ul class="clean">${R.rules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
   }
+  function ramWeeks() { const ws = []; for (let d = R.start; d <= (R.end || '2027-03-09'); d = addDays(d, 1)) { const w = weekOf(d); if (w && !ws.includes(w)) ws.push(w); } return ws.length ? (ws.length > 1 ? ws[0] + '–' + ws[ws.length - 1] : String(ws[0])) : ''; }
   function bindRamadan(root) { $$('[data-ramtoggle]', root).forEach((b) => (b.onclick = () => putCfg('settings', Object.assign({}, cfg.settings, { ramadan: !ramadanOn() })))); }
 
   /* ================= Sessions ================= */
@@ -621,7 +716,7 @@
     const U = P.UNITS;
     $('#v-nutrition').innerHTML = `
       <div class="card"><h2>Daily targets</h2>
-      <p class="muted">${esc(n.a)}: 32, 180 cm, 96 kg → under 90 kg. ${esc(n.b)}: 29, 170 cm, 71 kg → 67 kg. Expected loss: ~0.5 and ~0.4 kg/week.</p>
+      <p class="muted">${['a', 'b'].map((k) => { const pr = cfg.profile[k]; return `${esc(n[k])}: ${pr.age}, ${pr.height} cm, ${pr.weight} kg → ${pr.target} kg, expected −${pr.rate} kg/week`; }).join('. ')}. <a href="#setup">Edit profiles</a></p>
       ${['early', 'late'].map((ph) => `<div class="logtable"><h4 style="margin:6px 0">${Tg[ph].label}</h4>${Tg[ph].note ? `<p class="small muted">${esc(Tg[ph].note)}</p>` : ''}<table><thead><tr><th></th><th>Training day kcal</th><th>Friday kcal</th><th>Protein</th><th>Fat</th><th>Carbs (train / rest)</th></tr></thead><tbody>${trow(ph, 'a')}${trow(ph, 'b')}</tbody></table></div>`).join('')}</div>
       <div class="card"><h3>Check-ins</h3><dl class="kv">
         <dt>Week 3</dt><dd>Losing more than 0.8 kg/week (${esc(n.a)}) or 0.6 (${esc(n.b)})? Add ~150 kcal on training days. Nothing moving? Cut ~150 kcal or add 2k steps a day, not both.</dd>
@@ -838,11 +933,11 @@
     const pCard = (k) => {
       const st = weightStats(k), cfgp = PEOPLE[k], f1 = (x) => (x == null ? '–' : x.toFixed(1));
       const waist = store.log.filter((e) => e.person === k && e.waist).map((e) => [e.date, e.waist]);
-      return `<div class="card"><div class="row between"><h3 style="color:${PC[k]}">${esc(n[k])}</h3><span class="chip">Start ${cfgp.start} kg → ${cfgp.tLabel}</span></div>
+      return `<div class="card"><div class="row between"><h3 style="color:${PC[k]}">${esc(n[k])}</h3><span class="chip">Start ${cfgp.start} kg → ${cfgp.tLabel} · −${cfg.profile[k].rate} kg/wk planned</span></div>
         <div class="pstats"><div class="stat"><span class="v">${f1(st.a7)}</span><span class="l">7-day average (kg)</span></div>
         <div class="stat"><span class="v">${st.a7 == null ? '–' : (cfgp.start - st.a7 >= 0 ? '−' : '+') + Math.abs(cfgp.start - st.a7).toFixed(1)}</span><span class="l">Since start (kg)</span></div>
         <div class="stat"><span class="v">${st.rate == null ? '–' : st.rate.toFixed(2)}</span><span class="l">kg lost / week</span></div></div>
-        ${lineChart({ label: n[k] + ' weight', series: [{ pts: st.es.map((e) => [e.date, e.weight]), c: PC[k], dots: true }, { pts: rolling(st.es), c: PC[k], area: true, name: '7-day average' }], refs: [{ v: cfgp.target, c: 'var(--good)', label: 'Target ' + cfgp.tLabel }], empty: 'No weigh-ins yet. Log the first one on Friday 27 November or day 1.' })}
+        ${lineChart({ label: n[k] + ' weight', series: [{ pts: [[P.START, cfgp.start], [END, Math.max(cfgp.target, cfgp.start - cfg.profile[k].rate * P.WEEKS)]], c: 'var(--muted)', dash: true, name: 'Planned −' + cfg.profile[k].rate + ' kg/wk' }, { pts: st.es.map((e) => [e.date, e.weight]), c: PC[k], dots: true }, { pts: rolling(st.es), c: PC[k], area: true, name: '7-day average' }], refs: [{ v: cfgp.target, c: 'var(--good)', label: 'Target ' + cfgp.tLabel }], empty: 'No weigh-ins yet. Log the first one on Friday 27 November or day 1.' })}
         ${waist.length ? `<h4>Waist (cm)</h4>${lineChart({ label: 'waist', h: 150, series: [{ pts: waist, c: PC[k] }] })}` : ''}
         <h4>InBody</h4>${ibTable(k)}</div>`;
     };
@@ -962,7 +1057,7 @@
       if (avg(rpes) >= 9) { adv += ' Your last sessions felt very hard (RPE 9+): check sleep and pre-workout food.'; cls = 'warn'; }
       return `<div class="card"><h3 style="color:${PC[p]}">${esc(n[p])}</h3><div class="pstats">
         <div class="stat"><span class="v">${st.a7 == null ? '–' : st.a7.toFixed(1)}</span><span class="l">7-day avg kg</span></div>
-        <div class="stat"><span class="v">${st.rate == null ? '–' : st.rate.toFixed(2)}</span><span class="l">kg / week</span></div>
+        <div class="stat"><span class="v">${st.rate == null ? '–' : st.rate.toFixed(2)}</span><span class="l">kg / week (plan ${cfg.profile[p].rate})</span></div>
         <div class="stat"><span class="v">${proj}</span><span class="l">Projected target date</span></div>
         <div class="stat"><span class="v">${Math.round(last4(gymW[p]) * 100)}%</span><span class="l">Gym sessions, last 4 wks</span></div>
         <div class="stat"><span class="v">${Math.round(last4(swimW[p]) * 100)}%</span><span class="l">Swims logged, last 4 wks</span></div></div>
@@ -1077,7 +1172,7 @@
   const weekRange = (s) => { const ws = addDays(s, -((dow(s) + 1) % 7)); return [ws, addDays(ws, 6)]; };
   function flexUsed(p, s) { const [a, b] = weekRange(s); return store.daily.filter((x) => x.person === p && x.date >= a && x.date <= b && x.flex != null && x.date !== s).length; }
   // Free days: planned every other Saturday (weeks 2, 4, 6, 8, 10), movable within each 2-week block, shared by both
-  const FREE_DEFAULT = [2, 4, 6, 8, 10].map((w) => weekStart(w));
+  let FREE_DEFAULT = [2, 4, 6, 8, 10].map((w) => weekStart(w));
   const freeDays = () => (Array.isArray(cfg.settings.freeDays) ? cfg.settings.freeDays : FREE_DEFAULT);
   const isFree = (d) => freeDays().includes(d);
   const pairOf = (d) => Math.ceil((weekOf(d) || 0) / 2);
@@ -1176,7 +1271,7 @@
     }
     // Banners
     const banners = [];
-    if (today < P.START) banners.push(`<div class="banner"><span><strong>${diffDays(today, P.START)} days to go.</strong> Baseline bloodwork and InBody on 26–27 Nov, then week 1 starts Saturday 28 November.</span><a class="btn sm" href="#health">What to test</a></div>`);
+    if (today < P.START) banners.push(`<div class="banner"><span><strong>${diffDays(today, P.START)} days to go.</strong> Baseline bloodwork and InBody on ${fmt(addDays(P.START, -2), { day: 'numeric', month: 'short' })}–${fmt(addDays(P.START, -1), { day: 'numeric', month: 'short' })}, then week 1 starts ${fmt(P.START, { weekday: 'long', day: 'numeric', month: 'long' })}.</span><div class="row"><a class="btn sm" href="#setup">Change start date</a><a class="btn sm" href="#health">What to test</a></div></div>`);
     if (inRamadan(s)) banners.push(`<div class="banner alt"><span><strong>Ramadan (expected).</strong> ${ramadanOn() ? 'Showing the fasting plan.' : 'Fasting? Switch to the Ramadan plan.'}</span><button class="btn sm" id="ramtoggle" ${ro()}>${ramadanOn() ? 'Use the normal plan' : 'Switch to Ramadan plan'}</button></div>`);
     if (w && BENCHWEEKS[w] && [4, 6, 0, 3].includes(dow(s))) banners.push(`<div class="banner"><span><strong>Test week.</strong> Do this week's benchmark tests and log them.</span><a class="btn sm" href="#training">Log tests</a></div>`);
     const ib = P.WEIGH.inbody.find((x) => x.date === s); if (ib) banners.push(`<div class="banner"><span><strong>InBody today:</strong> ${esc(ib.label)}. Fasted, before anything else.</span><a class="btn sm" href="#body">Log scan</a></div>`);
@@ -1550,17 +1645,89 @@
   }
   function backupCard() {
     return `<div class="card"><div class="row between"><h3>Back up your data</h3><span class="status ${statusCls}" data-status>${esc(statusMsg)}</span></div><p class="small muted">Download any log as a spreadsheet (CSV opens in Excel, Numbers or Google Sheets), or everything in one file.</p>
-      <div class="row">${Object.keys(CSVCOLS).map((c) => `<button class="btn sm" data-csv="${c}">${LABELS[c]} (${store[c].length})</button>`).join('')}<button class="btn sm primary" data-csv="all">Everything</button></div></div>`;
+      <div class="row">${Object.keys(CSVCOLS).map((c) => `<button class="btn sm" data-csv="${c}">${LABELS[c]} (${store[c].length})</button>`).join('')}<button class="btn sm primary" data-csv="all">Everything</button></div>
+      <div class="row"><label class="btn sm" for="imp-file">Import a backup (.json)</label><input type="file" id="imp-file" accept="application/json,.json" hidden ${ro()}>${signedInAs() ? `<span class="small muted">Signed in as ${esc(signedInAs())}</span><button class="link" onclick="window.__signOut()">Sign out</button>` : ''}</div></div>`;
   }
   document.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-csv]'); if (!b) return;
     const c = b.dataset.csv, stamp = todayCairo();
     const filename = c === 'all' ? `swim-plan-backup-${stamp}.json` : `swim-plan-${c}-${stamp}.csv`;
-    const data = c === 'all' ? JSON.stringify({ exported: stamp, names: names(), data: store }, null, 2) : '\ufeff' + toCSV(c);
+    const data = c === 'all' ? JSON.stringify({ exported: stamp, names: names(), cfg, data: store }, null, 2) : '\ufeff' + toCSV(c);
+    if (!window.claude) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type: c === 'all' ? 'application/json' : 'text/csv' })); a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setStatus('Downloaded ' + filename + '.', 'good'); return; }
     let dl = null; try { dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null; } catch (err) { dl = null; }
     if (dl) { try { await dl.save({ filename, data }); setStatus('Saved ' + filename + '.', 'good'); return; } catch (err) { /* fall through to copy */ } }
     try { await navigator.clipboard.writeText(data); setStatus('Download isn\'t available here, so the data was copied instead. Paste it into a spreadsheet.', 'warn'); } catch (err) { setStatus('Couldn\'t download or copy here. Open the page on claude.ai and try again.', 'warn'); }
   });
+
+  document.addEventListener('change', async (e) => {
+    if (e.target.id !== 'imp-file' || !e.target.files[0]) return;
+    let j; try { j = JSON.parse(await e.target.files[0].text()); } catch (err) { setStatus('That file isn\'t a backup from this plan.', 'warn'); return; }
+    const data = j.data || {}; let n = 0;
+    if (j.cfg) { for (const k of ['names', 'supps', 'settings', 'profile']) if (j.cfg[k]) await putCfg(k, j.cfg[k]); } else if (j.names) await putCfg('names', j.names);
+    if (sb) {
+      const rows = []; COLS.forEach((c) => (data[c] || []).forEach((d) => { const x = Object.assign({}, d); const id = x._id; delete x._id; if (id) rows.push({ col: c, id, data: x, updated_at: new Date().toISOString() }); }));
+      for (let i = 0; i < rows.length; i += 200) { const { error } = await sb.from('docs').upsert(rows.slice(i, i + 200)); if (error) { sbErr(error, 'import'); return; } }
+      rows.forEach((r) => applyRow(r)); n = rows.length; renderAll();
+    } else { for (const c of COLS) for (const d of (data[c] || [])) { if (d._id) { await put(c, d._id, d); n++; } } }
+    setStatus('Imported ' + n + ' entries.', 'good'); e.target.value = '';
+  });
+
+  /* ================= Setup: profiles + start date ================= */
+  const RATES = [0.25, 0.3, 0.4, 0.5, 0.6, 0.75, 1];
+  function readProfile(k) {
+    const g = (f) => $(`#pf-${k}-${f}`); const n = (f) => num(g(f).value);
+    return { sex: g('sex').value, age: n('age'), height: n('height'), weight: n('weight'), target: n('target'), rate: n('rate') };
+  }
+  function profileStats(k, pr) {
+    const T = calcTargets(pr, pr.weight), keep = cfg.profile[k]; cfg.profile[k] = pr; const S = planSummary(k); cfg.profile[k] = keep;
+    const warn = [];
+    if (S.pctWk > 1) warn.push(`That's ${S.pctWk.toFixed(1)}% of body weight a week, faster than the safe 0.5–1%. Expect to lose muscle and swim performance.`);
+    if (S.tbmi < 18.5) warn.push('The target weight is below a healthy BMI for this height.');
+    if (T.avg < T.bmr) warn.push('Average intake would fall below resting burn. Choose a slower pace.');
+    const fits = S.needed <= pr.weight * 0.01;
+    return `<div class="pstats">
+      <div class="stat"><span class="v">−${pr.rate}</span><span class="l">kg / week expected</span></div>
+      <div class="stat"><span class="v">${T.train.toLocaleString('en')}</span><span class="l">kcal training days</span></div>
+      <div class="stat"><span class="v">${T.rest.toLocaleString('en')}</span><span class="l">kcal Fridays</span></div>
+      <div class="stat"><span class="v">${T.p} g</span><span class="l">protein a day</span></div>
+      <div class="stat"><span class="v">${S.at12.toFixed(1)}</span><span class="l">kg expected after 12 weeks</span></div>
+      <div class="stat"><span class="v">${isFinite(S.weeks) ? Math.ceil(S.weeks) : '–'}</span><span class="l">weeks to reach ${pr.target} kg</span></div></div>
+      <p class="small muted">Resting burn ~${T.bmr.toLocaleString('en')} kcal · maintenance at this training load ~${T.maint.toLocaleString('en')} kcal · daily deficit ~${T.def} kcal. BMI ${S.bmi.toFixed(1)} → ${S.tbmi.toFixed(1)}.</p>
+      ${S.toLose > 0 ? `<p class="small">To reach ${pr.target} kg in exactly 12 weeks: <strong>−${S.needed.toFixed(2)} kg/week</strong>${fits ? '' : ' (faster than recommended)'}.</p>` : '<p class="small">Already at or below the target weight: set the pace to the slowest option and focus on performance.</p>'}
+      ${warn.map((w) => `<div class="advice warn">${esc(w)}</div>`).join('')}`;
+  }
+  function renderSetup() {
+    const n = names(), st = cfg.settings.start || P.START;
+    const card = (k) => { const pr = cfg.profile[k]; const inp = (f, label, step, min, max) => `<label for="pf-${k}-${f}">${label}<input type="number" id="pf-${k}-${f}" step="${step}" min="${min}" max="${max}" inputmode="decimal" value="${pr[f]}"></label>`;
+      return `<div class="card" data-pcard="${k}"><div class="row between"><h3 style="color:${pcol(k)}">${esc(n[k])}</h3><button class="btn primary sm" data-psave="${k}" ${ro()}>Save ${esc(n[k])}'s profile</button></div>
+        <form class="log pform" onsubmit="return false">
+          <label for="pf-${k}-sex">Sex<select id="pf-${k}-sex"><option value="m" ${pr.sex === 'm' ? 'selected' : ''}>Male</option><option value="f" ${pr.sex === 'f' ? 'selected' : ''}>Female</option></select></label>
+          ${inp('age', 'Age', 1, 14, 90)}${inp('height', 'Height (cm)', 1, 120, 220)}${inp('weight', 'Starting weight (kg)', 0.1, 35, 250)}${inp('target', 'Target weight (kg)', 0.1, 35, 250)}
+          <label for="pf-${k}-rate">Expected loss per week<select id="pf-${k}-rate">${RATES.map((r) => `<option value="${r}" ${pr.rate == r ? 'selected' : ''}>−${r} kg/week${r === 0.5 && k === 'a' || r === 0.4 && k === 'b' ? ' (suggested)' : ''}</option>`).join('')}</select></label>
+        </form><div class="pstat-box" id="pst-${k}">${profileStats(k, pr)}</div></div>`; };
+    const snap = (d) => addDays(d, (6 - dow(d) + 7) % 7);
+    const preview = (d) => { const e = addDays(d, 83); return `Week 1 starts <strong>${fmt(d, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</strong> and week 12 ends ${fmt(e, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}. Baseline bloodwork and InBody: ${fmt(addDays(d, -2), { day: 'numeric', month: 'short' })}–${fmt(addDays(d, -1), { day: 'numeric', month: 'short' })}.`; };
+    $('#v-setup').innerHTML = `
+      <div class="card"><div class="row between"><h2>Start date</h2>${statusEl()}</div>
+        <p class="muted">Your training week starts on Saturday with the 1 pm swim, so the plan always starts on a Saturday. Pick any date and it moves to the next Saturday.</p>
+        <div class="row"><label class="small muted" for="st-date">Start</label><input type="date" id="st-date" value="${st}" class="btn"><button class="btn primary" id="st-save" ${ro()}>Save start date</button></div>
+        <p id="st-prev">${preview(st)}</p>
+        <p class="small muted">Changing it moves the whole schedule, the check-ins, the InBody and bloodwork dates and the free days. Your logs stay where they are, by date. Ramadan (expected from ${fmt(R.start, { day: 'numeric', month: 'short' })}) shows up wherever it overlaps.</p></div>
+      <div class="grid2">${card('a')}${card('b')}</div>
+      <div class="card"><h3>How the numbers work</h3><ul class="clean">
+        <li>Resting burn uses the Mifflin-St Jeor formula, then ×1.65 for desk days plus 8 sessions a week.</li>
+        <li>Each 1 kg of fat is about 7,700 kcal, so −0.5 kg/week is a deficit of about 550 kcal a day.</li>
+        <li>Training days get a bit more than Fridays; protein is 1.8 g per kg and fat 0.8 g per kg, with carbs making up the rest.</li>
+        <li>Weeks 7–12 are recalculated for the lower weight you should be at by then.</li>
+        <li>A safe pace is 0.5–1% of body weight a week. Slower keeps more muscle and better swim times.</li></ul></div>`;
+    const sd = $('#st-date');
+    sd.onchange = () => { if (!sd.value) return; const v = snap(sd.value); sd.value = v; $('#st-prev').innerHTML = preview(v); };
+    $('#st-save').onclick = () => { const v = snap(sd.value || st); state.date = null; state.gweek = null; putCfg('settings', Object.assign({}, cfg.settings, { start: v, freeDays: null })); clearDirty($('#v-setup')); };
+    ['a', 'b'].forEach((k) => {
+      $$(`[data-pcard="${k}"] input, [data-pcard="${k}"] select`).forEach((i) => (i.oninput = i.onchange = () => { const pr = readProfile(k); if ([pr.age, pr.height, pr.weight, pr.target, pr.rate].some((x) => x == null)) return; $('#pst-' + k).innerHTML = profileStats(k, pr); }));
+    });
+    $$('[data-psave]').forEach((b) => (b.onclick = () => { const k = b.dataset.psave, pr = readProfile(k); if ([pr.age, pr.height, pr.weight, pr.target, pr.rate].some((x) => x == null)) return setStatus('Fill in every field before saving.', 'warn'); putCfg('profile', Object.assign({}, cfg.profile, { [k]: pr })); clearDirty($(`[data-pcard="${k}"]`)); }));
+  }
 
   /* ================= Badges block for Analytics ================= */
   function badgesHTML() {
@@ -1577,17 +1744,17 @@
   function restoreDirty() { dirty.forEach((v, id) => { const i = document.getElementById(id); if (!i) return; if (i.type === 'checkbox') i.checked = v; else i.value = v; }); }
 
   /* ================= Router ================= */
-  const VIEWS = { today: renderToday, health: renderHealth, schedule: renderSchedule, sessions: renderSessions, exercises: renderExercises, timer: renderTimer, nutrition: renderNutrition, recipes: renderRecipes, supplements: renderSupps, groceries: renderGroceries, fuel: renderFuel, body: renderBody, training: renderTraining, analytics: renderAnalytics };
+  const VIEWS = { today: renderToday, health: renderHealth, setup: renderSetup, schedule: renderSchedule, sessions: renderSessions, exercises: renderExercises, timer: renderTimer, nutrition: renderNutrition, recipes: renderRecipes, supplements: renderSupps, groceries: renderGroceries, fuel: renderFuel, body: renderBody, training: renderTraining, analytics: renderAnalytics };
   const current = () => { const h = location.hash.replace('#', ''); return VIEWS[h] ? h : 'today'; };
   const ICON = {
     today: '<path d="M4 12l5 5L20 6" />',
     train: '<path d="M3 9v6M6 7v10M18 7v10M21 9v6M6 12h12" />',
     food: '<path d="M3 11h18a9 9 0 0 1-18 0zM8 7c0-2 2-2 2-4M13 7c0-2 2-2 2-4" />',
     progress: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />',
-    health: '<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.5-7 10-7 10z" />'
+    health: '<circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" />'
   };
-  const GROUPS = [['today', 'Today', ['today']], ['train', 'Train', ['sessions', 'schedule', 'exercises', 'timer', 'fuel']], ['food', 'Food', ['nutrition', 'recipes', 'groceries']], ['progress', 'Progress', ['analytics', 'body', 'training']], ['health', 'Health', ['health', 'supplements']]];
-  const SUBL = { sessions: 'Sessions', schedule: '12 weeks', exercises: 'Exercises', timer: 'Timer', fuel: 'Warm-ups + fueling', nutrition: 'Meal plan', recipes: 'Recipes', groceries: 'Groceries + prep', analytics: 'Overview + badges', body: 'Body', training: 'Training log', health: 'Bloodwork + checks', supplements: 'Supplements' };
+  const GROUPS = [['today', 'Today', ['today']], ['train', 'Train', ['sessions', 'schedule', 'exercises', 'timer', 'fuel']], ['food', 'Food', ['nutrition', 'recipes', 'groceries']], ['progress', 'Progress', ['analytics', 'body', 'training']], ['health', 'Setup', ['setup', 'health', 'supplements']]];
+  const SUBL = { sessions: 'Sessions', schedule: '12 weeks', exercises: 'Exercises', timer: 'Timer', fuel: 'Warm-ups + fueling', nutrition: 'Meal plan', recipes: 'Recipes', groceries: 'Groceries + prep', analytics: 'Overview + badges', body: 'Body', training: 'Training log', health: 'Bloodwork + checks', supplements: 'Supplements', setup: 'Profiles + start date' };
   const lastIn = lsGet('swimplan-lastin', {});
   function drawNav(c) {
     const g = GROUPS.find((x) => x[2].includes(c)) || GROUPS[0];
@@ -1597,6 +1764,7 @@
     $('#subnav').parentElement.hidden = g[2].length < 2;
   }
   function show() {
+    applyPlan();
     const c = current();
     $$('section.view').forEach((s) => s.classList.toggle('on', s.id === 'v-' + c));
     drawNav(c);
@@ -1608,7 +1776,7 @@
     VIEWS[c](); restoreDirty(); window.scrollTo(0, y);
     if (f) { const i = document.getElementById(f); if (i && i.focus) i.focus({ preventScroll: true }); }
   }
-  function renderAll() { $('#who').textContent = names().a + ' & ' + names().b; if (current() === 'timer') { drawTimer(); return; } rerender(); }
+  function renderAll() { applyPlan(); $('#who').textContent = names().a + ' & ' + names().b; if (current() === 'timer') { drawTimer(); return; } rerender(); }
   window.addEventListener('hashchange', show);
   $('#who').textContent = names().a + ' & ' + names().b;
   show();

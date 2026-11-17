@@ -290,6 +290,9 @@ dialog.sheet { width: min(640px, 100vw); max-height: 88dvh; }
 .chip.free { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); border-color: transparent; }
 .pd.free { background: var(--warn); }
 .balance { font-size: 13px; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 9%, var(--surface)); }
+.login { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center; padding: 16px; }
+.login-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 24px; width: min(420px, 100%); display: grid; gap: 12px; }
+.login-card form.inline input { flex: 1 1 200px; width: auto; min-width: 0; }
 .viewbar { gap: 10px; padding: 12px 16px; position: relative; }
 .seg-ctl { display: inline-flex; border: 1.5px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; background: var(--surface-2); }
 .seg-ctl button { border: 1.5px solid transparent; background: none; border-radius: 999px; padding: 5px 14px; font-weight: 600; cursor: pointer; color: var(--muted); }
@@ -505,15 +508,19 @@ details[open] summary { margin-bottom: 8px; }
   <section class="view" id="v-supplements"></section>
   <section class="view" id="v-groceries"></section>
   <section class="view" id="v-health"></section>
+  <section class="view" id="v-setup"></section>
   <section class="view" id="v-fuel"></section>
   <section class="view" id="v-body"></section>
   <section class="view" id="v-training"></section>
   <section class="view" id="v-analytics"></section>
 </main>
+<div id="login" class="login" hidden></div>
 <dialog id="mealsheet" class="sheet" aria-labelledby="mealsheet-title"><div id="mealsheet-body" class="modal"></div></dialog>
 <dialog id="sessdlg" class="sheet" aria-labelledby="sessdlg-title"><div id="sessdlg-body" class="modal"></div></dialog>
 <dialog id="wo" class="wo" aria-label="Workout"><div id="wo-body"></div></dialog>
 <dialog id="exdlg" aria-labelledby="exdlg-title"><div class="modal" id="exdlg-body"></div></dialog>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="data.js"></script>
 <script src="data2.js"></script>
 <script src="data3.js"></script>
